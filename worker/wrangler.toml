@@ -1,0 +1,18 @@
+name = "vendeloya"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+
+# Donde queda el token de MercadoLibre. Rota en cada renovación (el refresh
+# token es de un solo uso), por eso no puede ser un secreto fijo.
+# El id sale de:  npx wrangler kv namespace create KV
+[[kv_namespaces]]
+binding = "KV"
+id = "PENDIENTE"
+
+# Los secretos NO van acá. Se cargan uno por uno con
+#   npx wrangler secret put NOMBRE
+# y no se pueden volver a leer ni desde el dashboard:
+#   ML_CLIENT_ID        el Client ID de la app de MercadoLibre
+#   ML_CLIENT_SECRET    su Secret Key
+#   ANTHROPIC_API_KEY   la clave de la API de Claude
+#   APP_SECRET          una clave inventada; la misma se carga en Ajustes de la app

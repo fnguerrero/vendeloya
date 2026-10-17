@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2d3277">
+  <meta name="robots" content="noindex">
+  <title>VendeloYa</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css?v=1">
+</head>
+<body>
+  <header class="barra">
+    <h1>VendeloYa</h1>
+    <button id="cuenta" class="chip" type="button">Cuenta…</button>
+  </header>
+
+  <main>
+    <!-- 1. Fotos -->
+    <section id="paso-fotos" class="tarjeta">
+      <h2>Fotos</h2>
+      <p class="ayuda">De 1 a 6. Con buena luz y el producto entero; si tiene marca o modelo, que se vea.</p>
+      <div id="miniaturas" class="miniaturas"></div>
+      <div class="fila">
+        <label class="boton secundario">Sacar foto
+          <input id="camara" type="file" accept="image/*" capture="environment" hidden>
+        </label>
+        <label class="boton secundario">Galería
+          <input id="galeria" type="file" accept="image/*" multiple hidden>
+        </label>
+      </div>
+      <button id="analizar" class="boton principal" type="button" disabled>Analizar</button>
+    </section>
+
+    <!-- 2. Revisión -->
+    <section id="paso-revision" class="tarjeta" hidden>
+      <h2>Revisá antes de publicar</h2>
+      <div id="avisos-ia" class="avisos" hidden></div>
+
+      <label class="campo">Título <span id="contador" class="contador"></span>
+        <input id="titulo" type="text" autocomplete="off">
+      </label>
+
+      <label class="campo">Categoría
+        <select id="categoria"></select>
+      </label>
+
+      <div class="dos">
+        <label class="campo">Condición
+          <select id="condicion">
+            <option value="usado">Usado</option>
+            <option value="nuevo">Nuevo</option>
+            <option value="reacondicionado">Reacondicionado</option>
+          </select>
+        </label>
+        <label class="campo">Cantidad
+          <input id="cantidad" type="number" min="1" value="1" inputmode="numeric">
+        </label>
+      </div>
+
+      <label class="campo">Precio (ARS)
+        <input id="precio" type="number" min="1" inputmode="numeric">
+      </label>
+      <p id="precio-fuente" class="ayuda"></p>
+
+      <div class="dos">
+        <label class="campo">Tipo de publicación
+          <select id="tipo"></select>
+        </label>
+        <label class="campo">Garantía
+          <select id="garantia">
+            <option value="">No informar</option>
+            <option value="Sin garantía">Sin garantía</option>
+            <option value="Garantía del vendedor">Del vendedor (30 días)</option>
+          </select>
+        </label>
+      </div>
+
+      <h3>Ficha técnica</h3>
+      <p class="ayuda">Los marcados con * los pide MercadoLibre.</p>
+      <div id="atributos"></div>
+
+      <label class="campo">Descripción
+        <textarea id="descripcion" rows="8"></textarea>
+      </label>
+
+      <div id="resultado-revision" class="avisos" hidden></div>
+      <div class="fila">
+        <button id="revisar" class="boton secundario" type="button">Revisar con MercadoLibre</button>
+        <button id="publicar" class="boton principal" type="button" disabled>Publicar</button>
+      </div>
+      <button id="empezar" class="enlace" type="button">Empezar de nuevo</button>
+    </section>
+
+    <!-- 3. Publicada -->
+    <section id="paso-listo" class="tarjeta" hidden>
+      <h2>Publicada</h2>
+      <p id="listo-texto"></p>
+      <a id="listo-link" class="boton principal" target="_blank" rel="noopener">Ver en MercadoLibre</a>
+      <button id="otra" class="boton secundario" type="button">Publicar otra cosa</button>
+    </section>
+
+    <details id="ajustes" class="tarjeta">
+      <summary>Ajustes</summary>
+      <label class="campo">Clave de la app
+        <input id="clave" type="password" autocomplete="off" placeholder="La misma que APP_SECRET del Worker">
+      </label>
+      <button id="guardar-clave" class="boton secundario" type="button">Guardar</button>
+      <p class="ayuda">Queda solo en este dispositivo.</p>
+    </details>
+  </main>
+
+  <div id="espera" class="espera" hidden><div class="ruedita"></div><p id="espera-texto">Pensando…</p></div>
+
+  <dialog id="confirmar">
+    <h2>¿Publicar en tu cuenta?</h2>
+    <p id="confirmar-texto"></p>
+    <p class="ayuda">La publicación sale al público en MercadoLibre apenas confirmes.</p>
+    <div class="fila">
+      <button id="confirmar-no" class="boton secundario" type="button">Cancelar</button>
+      <button id="confirmar-si" class="boton principal" type="button">Sí, publicar</button>
+    </div>
+  </dialog>
+
+  <script src="config.js?v=1"></script>
+  <script src="app.js?v=1"></script>
+</body>
+</html>

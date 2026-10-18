@@ -7,7 +7,7 @@ compatibility_date = "2026-09-01"
 # El id sale de:  npx wrangler kv namespace create KV
 [[kv_namespaces]]
 binding = "KV"
-id = "PENDIENTE"
+id = "d9c5e212efe840f0b266b4078d7208cc"
 
 # Los secretos NO van acá. Se cargan uno por uno con
 #   npx wrangler secret put NOMBRE

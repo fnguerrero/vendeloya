@@ -1,0 +1,9 @@
+# La app (PWA) como Worker de archivos estáticos, aparte de la API.
+# Deploy, desde esta carpeta:
+#   npx wrangler deploy --config wrangler-app.toml
+# Lo que no se publica está en .assetsignore (el Worker de la API, docs, git).
+name = "vendeloya-app"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "."

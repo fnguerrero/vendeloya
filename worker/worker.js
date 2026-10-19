@@ -27,6 +27,7 @@ const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
 const SITIO = 'MLA';
 
 const ORIGENES = [
+  'https://vendeloya-app.fnguerrero.workers.dev',
   'https://fnguerrero.github.io',
   'http://localhost:5610',
   'http://127.0.0.1:5610'

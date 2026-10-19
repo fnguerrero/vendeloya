@@ -7,8 +7,9 @@ Es de uso personal: una sola cuenta de MercadoLibre, sin multiusuario.
 ## Cómo está armado
 
 ```
-index.html, app.js, styles.css   PWA en vanilla JS, sin build (GitHub Pages)
+index.html, app.js, styles.css   PWA en vanilla JS, sin build (Worker de estáticos vendeloya-app)
 config.js                        URL del Worker (no es secreta)
+wrangler-app.toml, .assetsignore deploy de la app y lo que NO se publica
 sw.js, manifest.webmanifest      instalable desde Chrome Android
 worker/worker.js                 backend en Cloudflare Workers: OAuth, MercadoLibre y rutas
 worker/ia.js                     las dos llamadas a Claude (claude-opus-5-5)
@@ -41,7 +42,7 @@ El flujo de punta a punta:
 2. **KV**: `npx wrangler kv namespace create KV` dentro de `worker/`, y pegar el `id` en `wrangler.toml`.
 3. **Secretos**: `npx wrangler secret put` con cada uno de `ML_CLIENT_ID`, `ML_CLIENT_SECRET`, `ANTHROPIC_API_KEY` y `APP_SECRET`. El último es una clave inventada por vos.
 4. **Deploy del Worker**: `npx wrangler deploy` dentro de `worker/`.
-5. **La app**: GitHub Pages en `fnguerrero.github.io/vendeloya/`. Si se publica en otro lado, sumar el origen a `ORIGENES` en `worker/worker.js`.
+5. **La app**: `npx wrangler deploy --config wrangler-app.toml` desde esta carpeta. Queda en https://vendeloya-app.fnguerrero.workers.dev. Es un Worker de solo estáticos, separado de la API: **no usar el nombre `vendeloya`, que es la API**. Ojo: `wrangler pages ...` en wrangler 4.151+ ya no crea un Pages clásico, despliega un Worker con la config de la carpeta. GitHub Pages no se llegó a activar. Si la app se publica en otro lado, sumar el origen a `ORIGENES` en `worker/worker.js`.
 6. En la app: **Ajustes** → cargar la misma `APP_SECRET`. Después **Conectar MercadoLibre** (el botón de arriba) y autorizar.
 
 ## Correrlo local

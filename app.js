@@ -195,6 +195,7 @@ function mostrarRevision(r) {
   $('precio').value = p.precio;
   $('descripcion').value = p.descripcion;
   $('garantia').value = p.garantia;
+  $('envio').value = '';
   $('cantidad').value = 1;
 
   $('categoria').replaceChildren(...r.categorias.map(c => opcion(c.id, c.nombre, c.id === r.categoria.id)));
@@ -293,6 +294,7 @@ function leerPublicacion() {
     tipoPublicacion: $('tipo').value,
     garantia,
     garantiaTiempo: garantia === 'Garantía del vendedor' ? '30 días' : '',
+    envio: $('envio').value,
     descripcion: $('descripcion').value,
     maxTitulo: estado.categoria?.maxTitulo || 60,
     pideGtin: !!estado.categoria?.pideGtin,
@@ -312,12 +314,13 @@ $('revisar').addEventListener('click', async () => {
   try {
     const r = await api('/api/revisar', { publicacion: leerPublicacion(), fotos: fotosParaEnviar() });
     guardarIdsDeFotos(r.fotos);
+    const notas = (r.avisos || []).map(a => `Aviso: ${a}`);
     if (r.ok) {
-      avisos($('resultado-revision'), 'ok', 'MercadoLibre la aceptó. No se publicó nada todavía.');
+      avisos($('resultado-revision'), 'ok', 'MercadoLibre la aceptó. No se publicó nada todavía.', notas);
       estado.revisada = true;
       $('publicar').disabled = false;
     } else {
-      avisos($('resultado-revision'), 'error', 'MercadoLibre pide corregir esto:', r.errores);
+      avisos($('resultado-revision'), 'error', 'MercadoLibre pide corregir esto:', [...(r.errores || []), ...notas]);
     }
   } catch (e) {
     avisos($('resultado-revision'), 'error', e.message);
@@ -394,7 +397,8 @@ async function apiDemo(ruta, cuerpo) {
     const falta = cuerpo.publicacion.atributos.filter(a => a.requerido && !a.valor).map(a => a.nombre);
     return falta.length
       ? { ok: false, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`), errores: [`Falta completar: ${falta.join(', ')}.`] }
-      : { ok: true, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`) };
+      : { ok: true, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`),
+          avisos: cuerpo.publicacion.envio === 'retiro' ? [] : ['Este producto no entra en Mercado Envíos (por tamaño o categoría): el envío queda a acordar con el comprador.'] };
   }
   if (ruta === '/api/publicar') return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo (no se publicó nada)' };
   throw new Error('Ruta demo desconocida');

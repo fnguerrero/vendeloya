@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   elegirAtributos, atributoParaML, recortarTitulo, limpiarDescripcion,
-  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin
+  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -133,6 +133,27 @@ test('aplicarGtin: solo códigos válidos, nunca inventados', () => {
   const bueno = [{ id: 'GTIN', valor: '036000291452' }];
   assert.equal(aplicarGtin(bueno, '')[0].valor, '036000291452');
   assert.deepEqual(aplicarGtin(attrs, '')[0], { id: 'BRAND', valor: 'X' });
+});
+
+test('separarCausas: los avisos no bloquean, los errores sí', () => {
+  // La respuesta real del 20/10/2026 para un vajillero: 400 con solo avisos de envío.
+  const soloAvisos = { message: 'Validation error', error: 'validation_error', status: 400, cause: [
+    { type: 'warning', code: 'shipping.lost_me1_by_user', message: 'User has not mode me1' },
+    { type: 'warning', code: 'shipping.lost_me2_by_catalog', message: 'Catalog has not mode me2' }
+  ] };
+  const r = separarCausas(soloAvisos);
+  assert.deepEqual(r.errores, []);
+  assert.equal(r.avisos.length, 2);
+  assert.match(r.avisos[1], /Mercado Envíos/);
+  const conError = separarCausas({ cause: [...soloAvisos.cause, { type: 'error', code: 'item.price.invalid', message: 'Price is invalid' }] });
+  assert.deepEqual(conError.errores, ['Price is invalid [item.price.invalid]']);
+  assert.deepEqual(separarCausas({ message: 'body.invalid_field_types', cause: [] }).errores, ['body.invalid_field_types']);
+});
+
+test('armarItem: solo retiro en persona', () => {
+  assert.equal(armarItem(base, { userProducts: true }).shipping, undefined);
+  assert.deepEqual(armarItem({ ...base, envio: 'retiro' }, { userProducts: true }).shipping,
+    { mode: 'not_specified', local_pick_up: true, free_shipping: false });
 });
 
 console.log(`\n${n} tests en verde`);

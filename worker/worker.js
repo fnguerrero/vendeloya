@@ -20,7 +20,7 @@
    ============================================================ */
 
 import { identificar, completarAtributos } from './ia.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, CONDICIONES } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, separarCausas, CONDICIONES } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -337,9 +337,11 @@ async function revisar(env, cuerpo) {
   const yo = await usuario(env);
   const item = armarItem(conFotos, { userProducts: yo.userProducts });
   const { status, datos } = await ml(env, '/items/validate', { metodo: 'POST', cuerpo: item, tolerar: [400] });
-  return status === 400
-    ? { ok: false, fotos, item, errores: erroresML(datos) }
-    : { ok: true, fotos, item };
+  if (status !== 400) return { ok: true, fotos, item, avisos: [] };
+  // Queda en el log del Worker (wrangler tail) por si hay que ver la respuesta cruda.
+  console.log('validate 400', JSON.stringify(datos));
+  const { errores, avisos } = separarCausas(datos);
+  return { ok: !errores.length, fotos, item, errores, avisos };
 }
 
 /** Publica de verdad. La app lo llama solo después de que Nico confirma. */

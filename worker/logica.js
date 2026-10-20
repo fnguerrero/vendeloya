@@ -132,6 +132,11 @@ export function armarItem(p, { userProducts }) {
   if (userProducts) item.family_name = titulo;
   else item.title = titulo;
 
+  // Muebles y cosas grandes: sin Mercado Envíos, se retira en persona.
+  if (p.envio === 'retiro') {
+    item.shipping = { mode: 'not_specified', local_pick_up: true, free_shipping: false };
+  }
+
   if (p.garantia) {
     item.sale_terms = [{ id: 'WARRANTY_TYPE', value_name: p.garantia }];
     if (p.garantia !== 'Sin garantía' && p.garantiaTiempo) {
@@ -219,4 +224,25 @@ export function erroresML(respuesta) {
     .slice()
     .sort((a, b) => (a.type === 'error' ? 0 : 1) - (b.type === 'error' ? 0 : 1))
     .map(c => `${c.type === 'warning' ? '(aviso) ' : ''}${c.message}${c.code ? ` [${c.code}]` : ''}`);
+}
+
+/* Avisos que MercadoLibre manda en inglés y que se entienden mejor dichos en criollo. */
+const AVISOS_CONOCIDOS = {
+  'shipping.lost_me1_by_user': 'Tu cuenta no tiene Mercado Envíos 1: el envío queda a acordar con el comprador.',
+  'shipping.lost_me2_by_catalog': 'Este producto no entra en Mercado Envíos (por tamaño o categoría): el envío queda a acordar con el comprador.'
+};
+
+/**
+ * El validador devuelve 400 tanto con errores como con avisos sueltos. Un aviso
+ * (type "warning") no impide publicar: se muestra, pero no bloquea. Si la
+ * respuesta no trae causas, el 400 es un error con su mensaje general.
+ */
+export function separarCausas(respuesta) {
+  const causas = Array.isArray(respuesta?.cause) ? respuesta.cause : [];
+  if (!causas.length) return { errores: erroresML(respuesta), avisos: [] };
+  const texto = c => AVISOS_CONOCIDOS[c.code] || `${c.message}${c.code ? ` [${c.code}]` : ''}`;
+  return {
+    errores: causas.filter(c => c.type !== 'warning').map(texto),
+    avisos: causas.filter(c => c.type === 'warning').map(texto)
+  };
 }

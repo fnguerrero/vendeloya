@@ -141,6 +141,34 @@ export function armarItem(p, { userProducts }) {
   return item;
 }
 
+/**
+ * ¿Es un código de barras real? GTIN-8, 12 (UPC), 13 (EAN) o 14, con su dígito
+ * verificador. La IA lee los números de abajo del código en la foto, y un
+ * dígito mal leído no puede llegar a MercadoLibre como dato del producto.
+ */
+export function gtinValido(codigo) {
+  const d = String(codigo || '').replace(/[\s-]/g, '');
+  if (!/^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(d)) return false;
+  const nums = [...d].map(Number);
+  const verificador = nums.pop();
+  const suma = nums.reverse().reduce((s, n, i) => s + n * (i % 2 === 0 ? 3 : 1), 0);
+  return (10 - (suma % 10)) % 10 === verificador;
+}
+
+/**
+ * El GTIN sale solo del código leído en la foto, y solo si es válido. Si la
+ * segunda llamada a la IA completó uno que no pasa el verificador, se borra:
+ * mejor que MercadoLibre lo pida a que quede un código inventado.
+ */
+export function aplicarGtin(atributos, codigoLeido) {
+  const limpio = String(codigoLeido || '').replace(/[\s-]/g, '');
+  return atributos.map(a => {
+    if (a.id !== 'GTIN') return a;
+    if (gtinValido(limpio)) return { ...a, valor: limpio };
+    return gtinValido(a.valor) ? a : { ...a, valor: '' };
+  });
+}
+
 /** Qué falta antes de poder siquiera validar. Lista vacía = se puede mandar. */
 export function faltantes(p) {
   const f = [];

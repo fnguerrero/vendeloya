@@ -51,7 +51,8 @@ const pesos = n => Number(n || 0).toLocaleString('es-AR', { style: 'currency', c
 
 async function api(ruta, cuerpo) {
   if (DEMO) return apiDemo(ruta, cuerpo);
-  if (!clave()) {
+  // El estado se pide igual sin clave: así se entera de si al Worker le faltan secretos.
+  if (!clave() && ruta !== '/api/estado') {
     $('ajustes').open = true;
     throw new Error('Cargá la clave de la app en Ajustes.');
   }
@@ -63,7 +64,7 @@ async function api(ruta, cuerpo) {
   const datos = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 409) refrescarCuenta();
-    throw new Error(datos.error || `Error ${res.status}`);
+    throw Object.assign(new Error(datos.error || `Error ${res.status}`), { faltan: datos.faltan });
   }
   return datos;
 }
@@ -74,11 +75,13 @@ async function refrescarCuenta() {
   const b = $('cuenta');
   try {
     const e = await api('/api/estado');
-    b.textContent = e.conectado ? e.nickname : 'Conectar MercadoLibre';
+    b.dataset.faltan = (e.faltan || []).join(', ');
+    b.textContent = e.conectado ? e.nickname : e.faltan?.length ? 'Falta configurar' : 'Conectar MercadoLibre';
     b.classList.toggle('conectada', !!e.conectado);
     b.dataset.conectada = e.conectado ? '1' : '';
   } catch (err) {
-    b.textContent = clave() ? 'Sin conexión' : 'Falta la clave';
+    b.dataset.faltan = err.faltan ? err.faltan.join(', ') : '';
+    b.textContent = err.faltan ? 'Falta configurar' : clave() ? 'Sin conexión' : 'Falta la clave';
     b.classList.remove('conectada');
     b.dataset.conectada = '';
   }
@@ -86,6 +89,10 @@ async function refrescarCuenta() {
 
 $('cuenta').addEventListener('click', () => {
   if (DEMO) return;
+  if ($('cuenta').dataset.faltan) {
+    alert(`Al Worker le faltan estos secretos: ${$('cuenta').dataset.faltan}.\nSe cargan con tools/cargar-secretos.ps1 (está en el README).`);
+    return;
+  }
   if (!clave()) { $('ajustes').open = true; $('clave').focus(); return; }
   if ($('cuenta').dataset.conectada && !confirm('La cuenta ya está conectada. ¿Volver a conectarla?')) return;
   window.open(`${window.VENDELOYA.worker}/oauth/start?k=${encodeURIComponent(clave())}`, '_blank', 'noopener');

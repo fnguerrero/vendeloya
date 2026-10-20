@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   elegirAtributos, atributoParaML, recortarTitulo, limpiarDescripcion,
-  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML
+  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -112,6 +112,27 @@ test('erroresML: errores antes que avisos, con código', () => {
   ] });
   assert.deepEqual(r, ['Price is invalid [item.price.invalid]', '(aviso) Title too long [item.title.length]']);
   assert.deepEqual(erroresML({ message: 'forbidden' }), ['forbidden']);
+});
+
+test('gtinValido: verifica el dígito de control', () => {
+  assert.ok(gtinValido('7790895000997'));        // EAN-13 real (Coca-Cola 2,25 L Argentina)
+  assert.ok(gtinValido('036000291452'));         // UPC-A del ejemplo de GS1
+  assert.ok(gtinValido('96385074'));             // EAN-8 de ejemplo
+  assert.ok(gtinValido('779 0895 000997'));      // con espacios, como se lee en la etiqueta
+  assert.ok(!gtinValido('7790895000998'));       // un dígito mal leído
+  assert.ok(!gtinValido('12345'));
+  assert.ok(!gtinValido(''));
+});
+
+test('aplicarGtin: solo códigos válidos, nunca inventados', () => {
+  const attrs = [{ id: 'BRAND', valor: 'X' }, { id: 'GTIN', valor: '' }];
+  assert.equal(aplicarGtin(attrs, '7790895000997')[1].valor, '7790895000997');
+  assert.equal(aplicarGtin(attrs, '7790895000998')[1].valor, '');
+  const inventado = [{ id: 'GTIN', valor: '1234567890123' }];
+  assert.equal(aplicarGtin(inventado, '')[0].valor, '');
+  const bueno = [{ id: 'GTIN', valor: '036000291452' }];
+  assert.equal(aplicarGtin(bueno, '')[0].valor, '036000291452');
+  assert.deepEqual(aplicarGtin(attrs, '')[0], { id: 'BRAND', valor: 'X' });
 });
 
 console.log(`\n${n} tests en verde`);

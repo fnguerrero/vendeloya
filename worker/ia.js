@@ -18,7 +18,7 @@ const SCHEMA_IDENTIFICACION = {
   type: 'object',
   additionalProperties: false,
   required: ['producto', 'titulo', 'busqueda', 'marca', 'modelo', 'condicion', 'estado_detalle',
-    'descripcion', 'caracteristicas', 'precio_estimado', 'confianza', 'advertencias'],
+    'descripcion', 'caracteristicas', 'codigo_barras', 'precio_estimado', 'confianza', 'advertencias'],
   properties: {
     producto: { type: 'string', description: 'Qué es, en pocas palabras.' },
     titulo: { type: 'string', description: 'Título para MercadoLibre: producto + marca + modelo + specs. Máximo 60 caracteres. Sin estado, sin envío, sin signos.' },
@@ -35,6 +35,10 @@ const SCHEMA_IDENTIFICACION = {
         type: 'object', additionalProperties: false, required: ['nombre', 'valor'],
         properties: { nombre: { type: 'string' }, valor: { type: 'string' } }
       }
+    },
+    codigo_barras: {
+      type: 'string',
+      description: 'Los números impresos debajo de un código de barras (EAN/UPC) si se ven en alguna foto, solo dígitos. Cadena vacía si no hay o no se leen todos con seguridad: nunca completes dígitos.'
     },
     precio_estimado: {
       type: 'object', additionalProperties: false, required: ['min', 'sugerido', 'max'],

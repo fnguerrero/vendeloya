@@ -20,7 +20,7 @@
    ============================================================ */
 
 import { identificar, completarAtributos } from './ia.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, CONDICIONES } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, CONDICIONES } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -83,7 +83,9 @@ async function oauthStart(request, env) {
   if (!iguales(new URL(request.url).searchParams.get('k'), env.APP_SECRET)) {
     return html('Clave incorrecta', 'Abrí la conexión desde la app, que agrega la clave sola.', 403);
   }
-  if (!env.ML_CLIENT_ID) return html('Falta configurar', 'El Worker no tiene cargado ML_CLIENT_ID.', 500);
+  if (!env.ML_CLIENT_ID || !env.ML_CLIENT_SECRET) {
+    return html('Falta configurar', 'El Worker no tiene cargados ML_CLIENT_ID y ML_CLIENT_SECRET. Corré tools/cargar-secretos.ps1.', 500);
+  }
 
   // PKCE: el verifier queda acá, solo viaja su hash.
   const state = azar(24);
@@ -235,12 +237,20 @@ async function atributosCompletos(env, identificacion, categoria) {
   if (!categoria.atributos.length) return [];
   const { json: r } = await completarAtributos(env, identificacion, categoria.atributos);
   const valores = new Map((r.atributos || []).map(a => [a.id, a.valor]));
-  return categoria.atributos.map(a => ({ ...a, valor: valores.get(a.id) || '' }));
+  const completos = categoria.atributos.map(a => ({ ...a, valor: valores.get(a.id) || '' }));
+  return aplicarGtin(completos, identificacion?.codigo_barras);
 }
 
 /* ---------- rutas de la app ---------- */
 
+/** Qué secretos faltan. Solo los nombres: los valores no salen nunca del Worker. */
+function faltanSecretos(env) {
+  return ['ML_CLIENT_ID', 'ML_CLIENT_SECRET', 'ANTHROPIC_API_KEY', 'APP_SECRET'].filter(n => !env[n]);
+}
+
 async function estado(env) {
+  const faltan = faltanSecretos(env);
+  if (faltan.length) return { conectado: false, faltan };
   const t = await env.KV.get('ml:tokens', 'json');
   if (!t) return { conectado: false };
   try {
@@ -371,7 +381,11 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors(permitido ? origen : ORIGENES[0]) });
     if (!url.pathname.startsWith('/api/')) return json({ error: 'No existe.' }, 404, ORIGENES[0]);
     if (!permitido) return json({ error: 'Origen no permitido.' }, 403, ORIGENES[0]);
-    if (!env.APP_SECRET || !iguales(request.headers.get('x-clave'), env.APP_SECRET)) {
+    // Sin APP_SECRET no hay clave que pueda coincidir: decirlo, en vez de "clave incorrecta".
+    if (!env.APP_SECRET) {
+      return json({ error: 'El Worker todavía no tiene los secretos cargados. Corré tools/cargar-secretos.ps1.', faltan: faltanSecretos(env) }, 503, origen);
+    }
+    if (!iguales(request.headers.get('x-clave'), env.APP_SECRET)) {
       return json({ error: 'Clave incorrecta. Revisala en Ajustes.' }, 401, origen);
     }
 

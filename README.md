@@ -40,7 +40,7 @@ El flujo de punta a punta:
    - PKCE activado.
    - Permisos: Usuarios y Publicación y sincronización, con lectura y escritura.
 2. **KV**: `npx wrangler kv namespace create KV` dentro de `worker/`, y pegar el `id` en `wrangler.toml`.
-3. **Secretos**: `npx wrangler secret put` con cada uno de `ML_CLIENT_ID`, `ML_CLIENT_SECRET`, `ANTHROPIC_API_KEY` y `APP_SECRET`. El último es una clave inventada por vos.
+3. **Secretos**: `powershell -ExecutionPolicy Bypass -File "W:\Working Folder Personal\Apps\VendeloYa	ools\cargar-secretos.ps1"` pide uno por uno `ML_CLIENT_ID`, `ML_CLIENT_SECRET`, `ANTHROPIC_API_KEY` y `APP_SECRET` (una clave inventada por vos), muestra cuáles quedaron cargados y abre la app. Mientras falte alguno, la app muestra **Falta configurar** arriba y dice cuáles.
 4. **Deploy del Worker**: `npx wrangler deploy` dentro de `worker/`.
 5. **La app**: `npx wrangler deploy --config wrangler-app.toml` desde esta carpeta. Queda en https://vendeloya-app.fnguerrero.workers.dev. Es un Worker de solo estáticos, separado de la API: **no usar el nombre `vendeloya`, que es la API**. Ojo: `wrangler pages ...` en wrangler 4.151+ ya no crea un Pages clásico, despliega un Worker con la config de la carpeta. GitHub Pages no se llegó a activar. Si la app se publica en otro lado, sumar el origen a `ORIGENES` en `worker/worker.js`.
 6. En la app: **Ajustes** → cargar la misma `APP_SECRET`. Después **Conectar MercadoLibre** (el botón de arriba) y autorizar.
@@ -54,7 +54,7 @@ El flujo de punta a punta:
 ## Pendientes
 
 - **Catálogo**: las categorías con catálogo obligatorio (celulares, electrónica de marca) quedan fuera del MVP. Ahí hay que buscar el producto en `/products/search` y publicar con `catalog_product_id`, y ese endpoint da 403 sin permisos especiales.
-- **Código de barras (GTIN)**: la IA no lo inventa. Si la categoría lo pide y no hay, se manda `EMPTY_GTIN_REASON = "El producto no tiene código registrado"`. Para productos nuevos con caja convendría leerlo de la foto o escanearlo.
+- **Código de barras (GTIN)**: la IA lee los números de abajo del código si se ven en una foto, y solo se usan si pasan el dígito verificador (`gtinValido` en `logica.js`). Un GTIN que la IA complete sin haberlo leído se borra. Si la categoría lo pide y no hay, se manda `EMPTY_GTIN_REASON = "El producto no tiene código registrado"`. Falta probar la lectura con fotos reales; un escáner con la cámara sería más confiable.
 - **Precio**: la búsqueda pública de MercadoLibre da 403 sin token. Falta probar si con token anda. Si no, el precio es la estimación de la IA, que es lo más flojo de la app. Otra opción es `/suggestions/items/{id}/details` después de publicar, que solo anda sobre ítems existentes.
 - **Atributos condicionales**: no se consulta `POST /categories/{id}/attributes/conditional`; los descubre el validador al revisar.
 - **Envío**: no se manda `shipping`, así que queda lo configurado en la cuenta.

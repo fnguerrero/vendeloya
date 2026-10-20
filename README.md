@@ -40,7 +40,7 @@ El flujo de punta a punta:
    - PKCE activado.
    - Permisos: Usuarios y Publicación y sincronización, con lectura y escritura.
 2. **KV**: `npx wrangler kv namespace create KV` dentro de `worker/`, y pegar el `id` en `wrangler.toml`.
-3. **Secretos**: `powershell -ExecutionPolicy Bypass -File "W:\Working Folder Personal\Apps\VendeloYa	ools\cargar-secretos.ps1"` pide uno por uno `ML_CLIENT_ID`, `ML_CLIENT_SECRET`, `ANTHROPIC_API_KEY` y `APP_SECRET` (una clave inventada por vos), muestra cuáles quedaron cargados y abre la app. Mientras falte alguno, la app muestra **Falta configurar** arriba y dice cuáles.
+3. **Secretos**: `powershell -ExecutionPolicy Bypass -File "W:\Working Folder Personal\Apps\VendeloYa\tools\cargar-secretos.ps1"` pide uno por uno `ML_CLIENT_ID`, `ML_CLIENT_SECRET`, `ANTHROPIC_API_KEY` y `APP_SECRET` (una clave inventada por vos), muestra cuáles quedaron cargados y abre la app. Mientras falte alguno, la app muestra **Falta configurar** arriba y dice cuáles.
 4. **Deploy del Worker**: `npx wrangler deploy` dentro de `worker/`.
 5. **La app**: `npx wrangler deploy --config wrangler-app.toml` desde esta carpeta. Queda en https://vendeloya-app.fnguerrero.workers.dev. Es un Worker de solo estáticos, separado de la API: **no usar el nombre `vendeloya`, que es la API**. Ojo: `wrangler pages ...` en wrangler 4.151+ ya no crea un Pages clásico, despliega un Worker con la config de la carpeta. GitHub Pages no se llegó a activar. Si la app se publica en otro lado, sumar el origen a `ORIGENES` en `worker/worker.js`.
 6. En la app: **Ajustes** → cargar la misma `APP_SECRET`. Después **Conectar MercadoLibre** (el botón de arriba) y autorizar.

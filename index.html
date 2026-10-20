@@ -3,24 +3,30 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#2d3277">
+  <meta name="theme-color" content="#ffe600">
   <meta name="robots" content="noindex">
   <title>VendeloYa</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=1">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700;6..12,800&display=swap">
+  <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body>
   <header class="barra">
-    <h1>VendeloYa</h1>
+    <a class="marca" href="./" aria-label="VendeloYa, inicio">
+      <img src="icon.svg" alt="" width="34" height="34">
+      <span class="nombre-marca">Vendelo<b>Ya</b></span>
+    </a>
     <button id="cuenta" class="chip" type="button">Cuenta…</button>
   </header>
 
   <main>
-    <!-- 1. Fotos -->
+    <!-- Inicio: fotos nuevas -->
     <section id="paso-fotos" class="tarjeta">
-      <h2>Fotos</h2>
-      <p class="ayuda">De 1 a 6. Con buena luz y el producto entero; si tiene marca o modelo, que se vea.</p>
+      <h2>¿Qué vendés hoy?</h2>
+      <p class="ayuda">De 1 a 6 fotos, con buena luz y el producto entero. Si tiene marca, modelo o código de barras, que se vea.</p>
       <div id="miniaturas" class="miniaturas"></div>
       <div class="fila">
         <label class="boton secundario">Sacar foto
@@ -30,12 +36,27 @@
           <input id="galeria" type="file" accept="image/*" multiple hidden>
         </label>
       </div>
-      <button id="analizar" class="boton principal" type="button" disabled>Analizar</button>
+      <button id="analizar" class="boton principal" type="button" disabled>Armar la publicación</button>
     </section>
 
-    <!-- 2. Revisión -->
+    <!-- Inicio: historial -->
+    <section id="historial" class="tarjeta">
+      <div class="titulo-seccion">
+        <h2>Tus publicaciones</h2>
+        <button id="refrescar-historial" class="enlace" type="button">Actualizar</button>
+      </div>
+      <p id="historial-vacio" class="ayuda">Todavía no analizaste nada. Lo que armes queda guardado acá, aunque cierres la app.</p>
+      <ul id="historial-lista" class="historial"></ul>
+    </section>
+
+    <!-- Revisión -->
     <section id="paso-revision" class="tarjeta" hidden>
+      <div class="titulo-seccion">
+        <button id="volver" class="enlace" type="button">‹ Volver</button>
+        <span id="guardado" class="guardado" aria-live="polite"></span>
+      </div>
       <h2>Revisá antes de publicar</h2>
+      <div id="fotos-revision" class="tira"></div>
       <div id="avisos-ia" class="avisos" hidden></div>
 
       <label class="campo">Título <span id="contador" class="contador"></span>
@@ -54,28 +75,11 @@
             <option value="reacondicionado">Reacondicionado</option>
           </select>
         </label>
-        <label class="campo">Cantidad
-          <input id="cantidad" type="number" min="1" value="1" inputmode="numeric">
+        <label class="campo">Precio (ARS)
+          <input id="precio" type="number" min="1" inputmode="numeric">
         </label>
       </div>
-
-      <label class="campo">Precio (ARS)
-        <input id="precio" type="number" min="1" inputmode="numeric">
-      </label>
       <p id="precio-fuente" class="ayuda"></p>
-
-      <div class="dos">
-        <label class="campo">Tipo de publicación
-          <select id="tipo"></select>
-        </label>
-        <label class="campo">Garantía
-          <select id="garantia">
-            <option value="">No informar</option>
-            <option value="Sin garantía">Sin garantía</option>
-            <option value="Garantía del vendedor">Del vendedor (30 días)</option>
-          </select>
-        </label>
-      </div>
 
       <label class="campo">Envío
         <select id="envio">
@@ -84,28 +88,53 @@
         </select>
       </label>
 
-      <h3>Ficha técnica</h3>
-      <p class="ayuda">Los marcados con * los pide MercadoLibre.</p>
-      <div id="atributos"></div>
+      <div id="bloque-requeridos">
+        <h3>Lo que pide MercadoLibre</h3>
+        <div id="atributos"></div>
+      </div>
 
       <label class="campo">Descripción
-        <textarea id="descripcion" rows="8"></textarea>
+        <textarea id="descripcion" rows="7"></textarea>
       </label>
+
+      <details id="mas" class="mas">
+        <summary id="mas-titulo">Más datos (opcional)</summary>
+        <div class="dos">
+          <label class="campo">Cantidad
+            <input id="cantidad" type="number" min="1" value="1" inputmode="numeric">
+          </label>
+          <label class="campo">Tipo de publicación
+            <select id="tipo"></select>
+          </label>
+        </div>
+        <label class="campo">Garantía
+          <select id="garantia">
+            <option value="">No informar</option>
+            <option value="Sin garantía">Sin garantía</option>
+            <option value="Garantía del vendedor">Del vendedor (30 días)</option>
+          </select>
+        </label>
+        <div id="bloque-opcionales">
+          <h3>Ficha técnica</h3>
+          <p class="ayuda">Completarla ayuda a que te encuentren, pero no es obligatoria.</p>
+          <div id="atributos-opcionales"></div>
+        </div>
+      </details>
 
       <div id="resultado-revision" class="avisos" hidden></div>
       <div class="fila">
         <button id="revisar" class="boton secundario" type="button">Revisar con MercadoLibre</button>
         <button id="publicar" class="boton principal" type="button" disabled>Publicar</button>
       </div>
-      <button id="empezar" class="enlace" type="button">Empezar de nuevo</button>
     </section>
 
-    <!-- 3. Publicada -->
-    <section id="paso-listo" class="tarjeta" hidden>
-      <h2>Publicada</h2>
+    <!-- Publicada -->
+    <section id="paso-listo" class="tarjeta listo" hidden>
+      <div class="sello" aria-hidden="true">✓</div>
+      <h2>¡Publicada!</h2>
       <p id="listo-texto"></p>
-      <a id="listo-link" class="boton principal" target="_blank" rel="noopener">Ver en MercadoLibre</a>
-      <button id="otra" class="boton secundario" type="button">Publicar otra cosa</button>
+      <a id="listo-link" class="boton principal" target="_blank" rel="noopener">Ver la publicación</a>
+      <button id="otra" class="boton secundario ancho" type="button">Publicar otra cosa</button>
     </section>
 
     <details id="ajustes" class="tarjeta">
@@ -119,11 +148,12 @@
   </main>
 
   <div id="espera" class="espera" hidden><div class="ruedita"></div><p id="espera-texto">Pensando…</p></div>
+  <div id="toast" class="toast" hidden><span id="toast-texto"></span><button id="toast-accion" type="button">Deshacer</button></div>
 
   <dialog id="confirmar">
     <h2>¿Publicar en tu cuenta?</h2>
     <p id="confirmar-texto"></p>
-    <p class="ayuda">La publicación sale al público en MercadoLibre apenas confirmes.</p>
+    <p class="ayuda">Sale al público en MercadoLibre apenas confirmes.</p>
     <div class="fila">
       <button id="confirmar-no" class="boton secundario" type="button">Cancelar</button>
       <button id="confirmar-si" class="boton principal" type="button">Sí, publicar</button>
@@ -131,6 +161,6 @@
   </dialog>
 
   <script src="config.js?v=1"></script>
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

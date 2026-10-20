@@ -13,6 +13,8 @@
      POST /api/categoria         otra categoría → sus atributos
      POST /api/revisar           sube fotos y valida SIN publicar
      POST /api/publicar          publica de verdad + descripción
+     GET  /api/registros         historial (resúmenes)
+     GET|PUT|DELETE /api/registros/<id>   un borrador o publicación guardada
 
    Todo /api/* pide el header x-clave = APP_SECRET. El Origin solo no
    alcanza: cualquiera lo falsifica con curl, y esta app publica en la
@@ -20,6 +22,7 @@
    ============================================================ */
 
 import { identificar, completarAtributos } from './ia.js';
+import * as registros from './registros.js';
 import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, separarCausas, CONDICIONES } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
@@ -42,7 +45,7 @@ const MAX_FOTOS = 6;
 function cors(origen) {
   return {
     'Access-Control-Allow-Origin': origen,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'content-type, x-clave',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin'
@@ -393,9 +396,25 @@ export default {
 
     try {
       if (request.method === 'GET' && url.pathname === '/api/estado') return json(await estado(env), 200, origen);
-      if (request.method !== 'POST') return json({ error: 'Método no permitido.' }, 405, origen);
 
       if (Number(request.headers.get('content-length') || 0) > MAX_CUERPO) return json({ error: 'Las fotos pesan demasiado.' }, 413, origen);
+
+      // Historial y borradores: /api/registros y /api/registros/<id>
+      if (url.pathname === '/api/registros' && request.method === 'GET') return json(await registros.listar(env), 200, origen);
+      const reg = /^\/api\/registros\/([^/]+)$/.exec(url.pathname);
+      if (reg) {
+        const id = decodeURIComponent(reg[1]);
+        if (request.method === 'GET') return json(await registros.leer(env, id), 200, origen);
+        if (request.method === 'DELETE') return json(await registros.borrar(env, id), 200, origen);
+        if (request.method === 'PUT') {
+          const cambios = await request.json().catch(() => null);
+          if (!cambios) return json({ error: 'Cuerpo inválido.' }, 400, origen);
+          return json(await registros.guardar(env, id, cambios), 200, origen);
+        }
+        return json({ error: 'Método no permitido.' }, 405, origen);
+      }
+
+      if (request.method !== 'POST') return json({ error: 'Método no permitido.' }, 405, origen);
       const cuerpo = await request.json().catch(() => null);
       if (!cuerpo) return json({ error: 'Cuerpo inválido.' }, 400, origen);
 

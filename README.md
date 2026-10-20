@@ -12,6 +12,7 @@ config.js                        URL del Worker (no es secreta)
 wrangler-app.toml, .assetsignore deploy de la app y lo que NO se publica
 sw.js, manifest.webmanifest      instalable desde Chrome Android
 worker/worker.js                 backend en Cloudflare Workers: OAuth, MercadoLibre y rutas
+worker/registros.js              historial y borradores en el KV (reg:<id> + índice regs)
 worker/ia.js                     las dos llamadas a Claude (claude-opus-5-5)
 worker/logica.js                 lógica pura: atributos, armado del ítem, precio, errores
 worker/test.mjs                  tests de logica.js sin red:  node worker/test.mjs
@@ -25,6 +26,10 @@ El flujo de punta a punta:
 3. **Revisión.** Todo es editable. Al cambiar de categoría se trae la ficha nueva.
 4. **`/api/revisar`.** Sube las fotos (y no las vuelve a subir después) y llama a `POST /items/validate`. **No publica nada.**
 5. **`/api/publicar`.** Solo se habilita si la última revisión dio OK y no se tocó nada después, y pide confirmación. Hace `POST /items` y después la descripción.
+
+### Historial y borradores
+
+Cada análisis es un registro guardado en el KV del Worker (`reg:<id>`, con fotos, análisis, lo editado y el estado), más un índice `regs` para la lista. Lo que se edita en la revisión se autoguarda a los 1,2 segundos. El registro abierto se recuerda en el navegador, así que al recargar se retoma. Estados: borrador, revisada (pasó el validador) y publicada (con el link). Como está en la nube, se ve igual desde el celu y la PC. Borrar del historial usa Deshacer y no despublica nada en MercadoLibre.
 
 ### Seguridad
 

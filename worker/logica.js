@@ -174,6 +174,30 @@ export function aplicarGtin(atributos, codigoLeido) {
   });
 }
 
+/** Lo que muestra el historial de un registro: liviano, sin las fotos grandes. */
+export function resumenRegistro(reg) {
+  const p = reg.publicacion || {};
+  const a = reg.analisis?.propuesta || {};
+  return {
+    id: reg.id,
+    creado: reg.creado,
+    actualizado: reg.actualizado,
+    titulo: p.titulo || a.titulo || reg.analisis?.identificacion?.producto || 'Sin título',
+    precio: Number(p.precio || a.precio) || 0,
+    estado: reg.estado || 'borrador',
+    thumb: reg.thumb || '',
+    permalink: reg.ml?.permalink || ''
+  };
+}
+
+/* El historial guarda hasta esta cantidad; los más viejos se caen de la lista (no del KV). */
+export const MAX_HISTORIAL = 200;
+
+/** Pone el resumen arriba de todo (reemplaza el anterior del mismo id) y recorta. */
+export function actualizarIndice(indice, resumen, max = MAX_HISTORIAL) {
+  return [resumen, ...indice.filter(r => r.id !== resumen.id)].slice(0, max);
+}
+
 /** Qué falta antes de poder siquiera validar. Lista vacía = se puede mandar. */
 export function faltantes(p) {
   const f = [];

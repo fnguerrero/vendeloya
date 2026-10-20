@@ -1,9 +1,14 @@
 /* ============================================================
    app.js — la PWA de VendeloYa.
 
-   Fotos → Analizar (el Worker llama a Claude y a MercadoLibre) →
-   revisión editable → Revisar (validador de MercadoLibre, no publica)
-   → Publicar (con confirmación).
+   Fotos → Armar la publicación (el Worker llama a Claude y a
+   MercadoLibre) → revisión editable → Revisar (validador de
+   MercadoLibre, no publica) → Publicar (con confirmación).
+
+   Cada análisis es un "registro" guardado en el Worker: lo que se
+   edita se autoguarda, al recargar se retoma donde estaba, y el
+   historial muestra todo lo analizado y publicado, desde cualquier
+   dispositivo.
 
    ?demo=1 corre sin Worker, con respuestas de mentira, para probar la
    pantalla sin gastar ni publicar nada.
@@ -14,19 +19,30 @@ const DEMO = new URLSearchParams(location.search).has('demo');
 const MAX_FOTOS = 6;
 const LADO_FOTO = 1200;   // lo que recomienda MercadoLibre; también alcanza para Claude
 const LADO_MINIMO = 500;  // debajo de esto MercadoLibre la deja chica y baja la calidad
+const LADO_THUMB = 160;   // la miniatura del historial
+const ESPERA_GUARDADO = 1200;
 
 const estado = {
   fotos: [],          // { dataUrl, id? }  el id lo da MercadoLibre al subirla
   analisis: null,     // respuesta de /api/analizar
+  categoria: null,
   atributos: [],
-  revisada: false     // true solo si el validador dio OK y no se tocó nada después
+  revisada: false,    // true solo si el validador dio OK y no se tocó nada después
+  registroId: null,   // el registro guardado en el Worker
+  estadoReg: 'borrador'
 };
 
 /* ---------- utilidades ---------- */
 
-function clave() {
-  try { return localStorage.getItem('vendeloya.clave') || ''; } catch { return ''; }
+function local(clave, valor) {
+  try {
+    if (valor === undefined) return localStorage.getItem(clave) || '';
+    if (valor === null) localStorage.removeItem(clave);
+    else localStorage.setItem(clave, valor);
+  } catch { return ''; }
 }
+
+const clave = () => local('vendeloya.clave');
 
 function esperar(texto) {
   $('espera-texto').textContent = texto;
@@ -49,24 +65,57 @@ function avisos(el, tipo, titulo, lista = []) {
 
 const pesos = n => Number(n || 0).toLocaleString('es-AR', { style: 'currency', currency: 'ARS', maximumFractionDigits: 0 });
 
-async function api(ruta, cuerpo) {
-  if (DEMO) return apiDemo(ruta, cuerpo);
+const fecha = iso => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const hoy = new Date();
+  return d.toDateString() === hoy.toDateString()
+    ? `hoy ${d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}`
+    : d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+};
+
+const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
+
+async function api(ruta, cuerpo, metodo) {
+  if (DEMO) return apiDemo(ruta, cuerpo, metodo);
   // El estado se pide igual sin clave: así se entera de si al Worker le faltan secretos.
   if (!clave() && ruta !== '/api/estado') {
     $('ajustes').open = true;
     throw new Error('Cargá la clave de la app en Ajustes.');
   }
   const res = await fetch(window.VENDELOYA.worker + ruta, {
-    method: cuerpo ? 'POST' : 'GET',
+    method: metodo || (cuerpo ? 'POST' : 'GET'),
     headers: { 'x-clave': clave(), ...(cuerpo ? { 'content-type': 'application/json' } : {}) },
     body: cuerpo ? JSON.stringify(cuerpo) : undefined
   });
   const datos = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 409) refrescarCuenta();
-    throw Object.assign(new Error(datos.error || `Error ${res.status}`), { faltan: datos.faltan });
+    throw Object.assign(new Error(datos.error || `Error ${res.status}`), { faltan: datos.faltan, status: res.status });
   }
   return datos;
+}
+
+let toastTimer;
+/** Aviso abajo con una acción opcional (Deshacer). Al vencer, corre `alVencer`. */
+function toast(texto, { accion, alAccion, alVencer, ms = 6000 } = {}) {
+  clearTimeout(toastTimer);
+  $('toast-texto').textContent = texto;
+  $('toast-accion').hidden = !accion;
+  $('toast-accion').textContent = accion || '';
+  $('toast-accion').onclick = () => { clearTimeout(toastTimer); $('toast').hidden = true; alAccion?.(); };
+  $('toast').hidden = false;
+  toastTimer = setTimeout(() => { $('toast').hidden = true; alVencer?.(); }, ms);
+}
+
+/* ---------- pantallas ---------- */
+
+function pantalla(cual) {
+  $('paso-fotos').hidden = cual !== 'inicio';
+  $('historial').hidden = cual !== 'inicio';
+  $('paso-revision').hidden = cual !== 'revision';
+  $('paso-listo').hidden = cual !== 'listo';
+  scrollTo({ top: 0 });
 }
 
 /* ---------- cuenta ---------- */
@@ -97,33 +146,36 @@ $('cuenta').addEventListener('click', () => {
   if ($('cuenta').dataset.conectada && !confirm('La cuenta ya está conectada. ¿Volver a conectarla?')) return;
   window.open(`${window.VENDELOYA.worker}/oauth/start?k=${encodeURIComponent(clave())}`, '_blank', 'noopener');
 });
-// Al volver de la pestaña de MercadoLibre, se mira si quedó conectada.
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refrescarCuenta(); });
+// Al volver de la pestaña de MercadoLibre (o de otra app), se mira si quedó conectada.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  refrescarCuenta();
+  if (!$('historial').hidden) cargarHistorial();
+});
 
 $('guardar-clave').addEventListener('click', () => {
-  try { localStorage.setItem('vendeloya.clave', $('clave').value.trim()); } catch {}
+  local('vendeloya.clave', $('clave').value.trim());
   $('clave').value = '';
   $('ajustes').open = false;
   refrescarCuenta();
+  cargarHistorial();
 });
 
 /* ---------- fotos ---------- */
 
-function redimensionar(archivo) {
+function escalar(fuente, lado, calidad) {
   return new Promise((ok, mal) => {
-    const url = URL.createObjectURL(archivo);
     const img = new Image();
     img.onload = () => {
-      URL.revokeObjectURL(url);
-      const escala = Math.min(1, LADO_FOTO / Math.max(img.width, img.height));
+      const escala = Math.min(1, lado / Math.max(img.width, img.height));
       const cv = document.createElement('canvas');
       cv.width = Math.round(img.width * escala);
       cv.height = Math.round(img.height * escala);
       cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
-      ok({ dataUrl: cv.toDataURL('image/jpeg', 0.85), chica: Math.max(img.width, img.height) < LADO_MINIMO });
+      ok({ dataUrl: cv.toDataURL('image/jpeg', calidad), chica: Math.max(img.width, img.height) < LADO_MINIMO });
     };
-    img.onerror = () => { URL.revokeObjectURL(url); mal(new Error('No se pudo leer la foto.')); };
-    img.src = url;
+    img.onerror = () => mal(new Error('No se pudo leer la foto.'));
+    img.src = fuente;
   });
 }
 
@@ -131,20 +183,20 @@ async function agregarFotos(archivos) {
   let chicas = 0;
   for (const a of archivos) {
     if (estado.fotos.length >= MAX_FOTOS) break;
+    const url = URL.createObjectURL(a);
     try {
-      const { dataUrl, chica } = await redimensionar(a);
+      const { dataUrl, chica } = await escalar(url, LADO_FOTO, 0.85);
       estado.fotos.push({ dataUrl });
       if (chica) chicas++;
     } catch (e) { alert(e.message); }
+    URL.revokeObjectURL(url);
   }
   if (chicas) alert('Alguna foto es chica (menos de 500 px). MercadoLibre la va a mostrar con baja calidad.');
-  tocado();
   dibujarFotos();
 }
 
 function dibujarFotos() {
-  const cont = $('miniaturas');
-  cont.replaceChildren(...estado.fotos.map((f, i) => {
+  $('miniaturas').replaceChildren(...estado.fotos.map((f, i) => {
     const d = document.createElement('div');
     d.className = 'miniatura';
     const img = document.createElement('img');
@@ -154,7 +206,7 @@ function dibujarFotos() {
     x.type = 'button';
     x.textContent = '×';
     x.setAttribute('aria-label', `Sacar foto ${i + 1}`);
-    x.onclick = () => { estado.fotos.splice(i, 1); tocado(); dibujarFotos(); };
+    x.onclick = () => { estado.fotos.splice(i, 1); dibujarFotos(); };
     d.append(img, x);
     return d;
   }));
@@ -172,7 +224,13 @@ $('analizar').addEventListener('click', async () => {
   try {
     const r = await api('/api/analizar', { fotos: estado.fotos.map(f => f.dataUrl) });
     estado.analisis = r;
+    estado.registroId = nuevoId();
+    estado.estadoReg = 'borrador';
     mostrarRevision(r);
+    local('vendeloya.actual', estado.registroId);
+    // Primer guardado: con las fotos y la miniatura. Los siguientes van sin fotos.
+    const { dataUrl: thumb } = await escalar(estado.fotos[0].dataUrl, LADO_THUMB, 0.7);
+    await guardar({ fotos: estado.fotos, thumb, analisis: r });
   } catch (e) {
     alert(e.message);
   } finally {
@@ -188,67 +246,95 @@ function opcion(valor, texto, elegida) {
   return o;
 }
 
-function mostrarRevision(r) {
-  const p = r.propuesta;
-  $('titulo').value = p.titulo;
-  $('condicion').value = p.condicion;
-  $('precio').value = p.precio;
-  $('descripcion').value = p.descripcion;
-  $('garantia').value = p.garantia;
-  $('envio').value = '';
-  $('cantidad').value = 1;
+/**
+ * Llena la revisión. `guardada` es lo que se había editado (al retomar un
+ * borrador); sin eso, se usa lo que propuso la IA.
+ */
+function mostrarRevision(r, guardada) {
+  const p = guardada || r.propuesta;
+  $('titulo').value = p.titulo || '';
+  $('condicion').value = p.condicion || 'usado';
+  $('precio').value = p.precio || '';
+  $('descripcion').value = p.descripcion || '';
+  $('garantia').value = p.garantia || '';
+  $('envio').value = p.envio || '';
+  $('cantidad').value = p.cantidad || 1;
 
-  $('categoria').replaceChildren(...r.categorias.map(c => opcion(c.id, c.nombre, c.id === r.categoria.id)));
-  dibujarCategoria(r.categoria, r.atributos, p.tipoPublicacion);
+  const categoria = guardada?.categoriaDatos || r.categoria;
+  const categorias = r.categorias.some(c => c.id === categoria.id)
+    ? r.categorias : [{ id: categoria.id, nombre: categoria.nombre }, ...r.categorias];
+  $('categoria').replaceChildren(...categorias.map(c => opcion(c.id, c.nombre, c.id === categoria.id)));
+  dibujarCategoria(categoria, guardada?.atributos || r.atributos, p.tipoPublicacion);
 
   const pr = r.precio;
   $('precio-fuente').textContent = pr.fuente === 'mercadolibre'
     ? `Mediana de ${pr.muestras} publicaciones parecidas (entre ${pesos(pr.min)} y ${pesos(pr.max)}).`
-    : `Estimado por la IA, entre ${pesos(pr.min)} y ${pesos(pr.max)}. No hubo datos de MercadoLibre (${pr.motivo || 'sin búsqueda'}): conviene chequearlo.`;
+    : `Estimado por la IA, entre ${pesos(pr.min)} y ${pesos(pr.max)}. Conviene chequearlo en MercadoLibre.`;
 
   const id = r.identificacion;
-  const lista = [`Estado: ${id.estado_detalle}`, ...id.advertencias];
+  const lista = [`Estado: ${id.estado_detalle}`, ...(id.advertencias || [])];
   if (id.confianza !== 'alta') lista.unshift(`La IA tiene confianza ${id.confianza} en lo que identificó.`);
   avisos($('avisos-ia'), '', `Identificado: ${id.producto}`, lista);
 
+  $('fotos-revision').replaceChildren(...estado.fotos.map((f, i) => {
+    const img = document.createElement('img');
+    img.src = f.dataUrl;
+    img.alt = `Foto ${i + 1}`;
+    return img;
+  }));
+
   $('resultado-revision').hidden = true;
-  $('paso-revision').hidden = false;
-  $('paso-revision').scrollIntoView({ behavior: 'smooth' });
-  tocado();
+  $('guardado').textContent = '';
+  $('mas').open = false;
+  estado.revisada = false;
+  $('publicar').disabled = true;
+  pantalla('revision');
 }
 
+function campoAtributo(a) {
+  const l = document.createElement('label');
+  l.className = `campo${a.requerido ? ' requerido' : ''}`;
+  const n = document.createElement('span');
+  n.className = 'nombre';
+  n.textContent = a.nombre;
+  let control;
+  if (a.opciones.length) {
+    control = document.createElement('select');
+    control.append(opcion('', '—', !a.valor));
+    const enLista = a.opciones.some(o => o.nombre === a.valor);
+    if (a.valor && !enLista) control.append(opcion(a.valor, a.valor, true));
+    control.append(...a.opciones.map(o => opcion(o.nombre, o.nombre, o.nombre === a.valor)));
+  } else {
+    control = document.createElement('input');
+    control.type = 'text';
+    control.value = a.valor || '';
+    if (a.unidades.length) control.placeholder = `Ej.: 10 ${a.unidades[0]}`;
+  }
+  control.dataset.id = a.id;
+  l.append(n, control);
+  return l;
+}
+
+/** A la vista solo lo obligatorio; lo opcional, plegado en "Más datos". */
 function dibujarCategoria(categoria, atributos, tipoElegido) {
   estado.atributos = atributos;
   estado.categoria = categoria;
   actualizarContador();
 
-  const tipos = categoria.tiposPublicacion.length ? categoria.tiposPublicacion : [{ id: 'gold_special', nombre: 'Clásica' }];
+  const tipos = categoria.tiposPublicacion?.length ? categoria.tiposPublicacion : [{ id: 'gold_special', nombre: 'Clásica' }];
   const elegido = tipos.some(t => t.id === tipoElegido) ? tipoElegido : tipos[0].id;
   $('tipo').replaceChildren(...tipos.map(t => opcion(t.id, t.nombre, t.id === elegido)));
 
-  $('atributos').replaceChildren(...atributos.map(a => {
-    const l = document.createElement('label');
-    l.className = `campo${a.requerido ? ' requerido' : ''}`;
-    const n = document.createElement('span');
-    n.className = 'nombre';
-    n.textContent = a.nombre;
-    let control;
-    if (a.opciones.length) {
-      control = document.createElement('select');
-      control.append(opcion('', '—', !a.valor));
-      const enLista = a.opciones.some(o => o.nombre === a.valor);
-      if (a.valor && !enLista) control.append(opcion(a.valor, a.valor, true));
-      control.append(...a.opciones.map(o => opcion(o.nombre, o.nombre, o.nombre === a.valor)));
-    } else {
-      control = document.createElement('input');
-      control.type = 'text';
-      control.value = a.valor || '';
-      if (a.unidades.length) control.placeholder = `Ej.: 10 ${a.unidades[0]}`;
-    }
-    control.dataset.id = a.id;
-    l.append(n, control);
-    return l;
-  }));
+  const requeridos = atributos.filter(a => a.requerido);
+  const opcionales = atributos.filter(a => !a.requerido);
+  $('atributos').replaceChildren(...requeridos.map(campoAtributo));
+  $('atributos-opcionales').replaceChildren(...opcionales.map(campoAtributo));
+  $('bloque-requeridos').hidden = !requeridos.length;
+  $('bloque-opcionales').hidden = !opcionales.length;
+  const completos = opcionales.filter(a => a.valor).length;
+  $('mas-titulo').textContent = opcionales.length
+    ? `Más datos (opcional · ${completos} de ${opcionales.length} completos)`
+    : 'Más datos (opcional)';
 }
 
 $('categoria').addEventListener('change', async () => {
@@ -256,6 +342,7 @@ $('categoria').addEventListener('change', async () => {
   try {
     const r = await api('/api/categoria', { categoria: $('categoria').value, identificacion: estado.analisis.identificacion });
     dibujarCategoria(r.categoria, r.atributos, $('tipo').value);
+    programarGuardado();
   } catch (e) {
     alert(e.message);
     $('categoria').value = estado.categoria.id;
@@ -272,18 +359,155 @@ function actualizarContador() {
 }
 $('titulo').addEventListener('input', actualizarContador);
 
-/* Cualquier cambio después de revisar obliga a revisar de nuevo. */
-function tocado() {
+/* Cualquier cambio después de revisar obliga a revisar de nuevo, y se autoguarda. */
+function tocado(e) {
+  if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
   estado.revisada = false;
   $('publicar').disabled = true;
+  if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
+  programarGuardado();
 }
 $('paso-revision').addEventListener('input', tocado);
 $('paso-revision').addEventListener('change', tocado);
 
+/* ---------- guardado ---------- */
+
+let guardadoTimer;
+
+function programarGuardado() {
+  if (!estado.registroId) return;
+  clearTimeout(guardadoTimer);
+  $('guardado').textContent = 'Sin guardar…';
+  guardadoTimer = setTimeout(() => guardar(), ESPERA_GUARDADO);
+}
+
+/** Guarda lo editado (y lo que venga en `extra`) en el registro actual. */
+async function guardar(extra = {}) {
+  if (!estado.registroId) return;
+  clearTimeout(guardadoTimer);
+  $('guardado').textContent = 'Guardando…';
+  try {
+    await api(`/api/registros/${estado.registroId}`, { publicacion: leerPublicacion(), estado: estado.estadoReg, ...extra }, 'PUT');
+    $('guardado').textContent = 'Guardado ✓';
+  } catch (e) {
+    $('guardado').textContent = 'No se pudo guardar';
+    console.warn('guardar:', e.message);
+  }
+}
+
+/* ---------- historial ---------- */
+
+const ESTADOS = { borrador: 'Borrador', revisada: 'Revisada', publicada: 'Publicada' };
+const ocultos = new Set(); // borrados con "Deshacer" pendiente
+
+async function cargarHistorial() {
+  if (!clave() && !DEMO) { dibujarHistorial([]); return; }
+  try {
+    const { registros } = await api('/api/registros');
+    dibujarHistorial(registros);
+  } catch (e) {
+    $('historial-vacio').textContent = `No se pudo traer el historial: ${e.message}`;
+    $('historial-vacio').hidden = false;
+  }
+}
+
+function dibujarHistorial(registros) {
+  const visibles = registros.filter(r => !ocultos.has(r.id));
+  $('historial-vacio').hidden = visibles.length > 0;
+  $('historial-vacio').textContent = 'Todavía no analizaste nada. Lo que armes queda guardado acá, aunque cierres la app.';
+  $('historial-lista').replaceChildren(...visibles.map(r => {
+    const li = document.createElement('li');
+    li.className = 'item';
+    const abrir = document.createElement(r.estado === 'publicada' && r.permalink ? 'a' : 'button');
+    abrir.className = 'item-abrir';
+    if (abrir.tagName === 'A') { abrir.href = r.permalink; abrir.target = '_blank'; abrir.rel = 'noopener'; }
+    else { abrir.type = 'button'; abrir.onclick = () => abrirRegistro(r.id); }
+
+    const img = document.createElement('img');
+    img.alt = '';
+    if (r.thumb) img.src = r.thumb;
+    const texto = document.createElement('div');
+    texto.className = 'item-texto';
+    const t = document.createElement('strong');
+    t.textContent = r.titulo;
+    const sub = document.createElement('span');
+    sub.textContent = `${pesos(r.precio)} · ${fecha(r.actualizado || r.creado)}`;
+    const chip = document.createElement('span');
+    chip.className = `estado estado-${r.estado}`;
+    chip.textContent = ESTADOS[r.estado] || r.estado;
+    texto.append(t, sub);
+    abrir.append(img, texto, chip);
+
+    const borrar = document.createElement('button');
+    borrar.type = 'button';
+    borrar.className = 'item-borrar';
+    borrar.textContent = '×';
+    borrar.title = r.estado === 'publicada' ? 'Sacar del historial (no la despublica)' : 'Borrar borrador';
+    borrar.setAttribute('aria-label', `${borrar.title}: ${r.titulo}`);
+    borrar.onclick = () => borrarRegistro(r, registros);
+
+    li.append(abrir, borrar);
+    return li;
+  }));
+}
+
+/** Borrado chico: desaparece ya, y se borra de verdad si no se toca "Deshacer". */
+function borrarRegistro(r, registros) {
+  ocultos.add(r.id);
+  dibujarHistorial(registros);
+  if (local('vendeloya.actual') === r.id) local('vendeloya.actual', null);
+  toast(r.estado === 'publicada' ? 'Sacada del historial (sigue publicada).' : 'Borrador borrado.', {
+    accion: 'Deshacer',
+    alAccion: () => { ocultos.delete(r.id); dibujarHistorial(registros); },
+    alVencer: async () => {
+      try { await api(`/api/registros/${r.id}`, null, 'DELETE'); }
+      catch (e) { toast(`No se pudo borrar: ${e.message}`); ocultos.delete(r.id); cargarHistorial(); }
+    }
+  });
+}
+
+async function abrirRegistro(id, { silencioso = false } = {}) {
+  if (!silencioso) esperar('Abriendo…');
+  try {
+    const reg = await api(`/api/registros/${id}`);
+    if (!reg.analisis) throw new Error('El registro no tiene análisis.');
+    estado.registroId = reg.id;
+    estado.fotos = reg.fotos || [];
+    estado.analisis = reg.analisis;
+    estado.estadoReg = reg.estado === 'publicada' ? 'publicada' : 'borrador';
+    if (reg.estado === 'publicada') { mostrarListo(reg.ml || {}, null); return; }
+    mostrarRevision(reg.analisis, reg.publicacion);
+    $('guardado').textContent = 'Guardado ✓';
+    local('vendeloya.actual', reg.id);
+  } catch (e) {
+    local('vendeloya.actual', null);
+    if (!silencioso) alert(e.message);
+  } finally {
+    esperar('');
+  }
+}
+
+$('refrescar-historial').addEventListener('click', cargarHistorial);
+
+function volverAlInicio() {
+  clearTimeout(guardadoTimer);
+  if (estado.registroId && $('guardado').textContent === 'Sin guardar…') guardar();
+  estado.fotos = [];
+  estado.analisis = null;
+  estado.atributos = [];
+  estado.registroId = null;
+  local('vendeloya.actual', null);
+  dibujarFotos();
+  pantalla('inicio');
+  cargarHistorial();
+}
+$('volver').addEventListener('click', volverAlInicio);
+$('otra').addEventListener('click', volverAlInicio);
+
 /* ---------- revisar y publicar ---------- */
 
 function leerPublicacion() {
-  const valores = new Map([...$('atributos').querySelectorAll('[data-id]')].map(c => [c.dataset.id, c.value.trim()]));
+  const valores = new Map([...$('paso-revision').querySelectorAll('[data-id]')].map(c => [c.dataset.id, c.value.trim()]));
   const garantia = $('garantia').value;
   return {
     titulo: $('titulo').value.trim(),
@@ -298,30 +522,36 @@ function leerPublicacion() {
     descripcion: $('descripcion').value,
     maxTitulo: estado.categoria?.maxTitulo || 60,
     pideGtin: !!estado.categoria?.pideGtin,
+    categoriaDatos: estado.categoria,
     atributos: estado.atributos.map(a => ({ ...a, valor: valores.get(a.id) || '' }))
   };
 }
 
 const fotosParaEnviar = () => estado.fotos.map(f => (f.id ? { id: f.id } : { dataUrl: f.dataUrl }));
 
-/** Las fotos que ya subió MercadoLibre no se vuelven a subir. */
+/** Las fotos que ya subió MercadoLibre no se vuelven a subir (y se guardan con su id). */
 function guardarIdsDeFotos(ids = []) {
-  ids.forEach((id, i) => { if (estado.fotos[i]) estado.fotos[i].id = id; });
+  let nuevas = false;
+  ids.forEach((id, i) => { if (estado.fotos[i] && estado.fotos[i].id !== id) { estado.fotos[i].id = id; nuevas = true; } });
+  return nuevas;
 }
 
 $('revisar').addEventListener('click', async () => {
   esperar('MercadoLibre está revisando la publicación…');
   try {
     const r = await api('/api/revisar', { publicacion: leerPublicacion(), fotos: fotosParaEnviar() });
-    guardarIdsDeFotos(r.fotos);
+    const fotosNuevas = guardarIdsDeFotos(r.fotos);
     const notas = (r.avisos || []).map(a => `Aviso: ${a}`);
     if (r.ok) {
       avisos($('resultado-revision'), 'ok', 'MercadoLibre la aceptó. No se publicó nada todavía.', notas);
       estado.revisada = true;
+      estado.estadoReg = 'revisada';
       $('publicar').disabled = false;
     } else {
       avisos($('resultado-revision'), 'error', 'MercadoLibre pide corregir esto:', [...(r.errores || []), ...notas]);
+      if (r.errores?.some(t => /atributo|attribute/i.test(t))) $('mas').open = true;
     }
+    guardar(fotosNuevas ? { fotos: estado.fotos } : {});
   } catch (e) {
     avisos($('resultado-revision'), 'error', e.message);
   } finally {
@@ -337,16 +567,22 @@ $('publicar').addEventListener('click', () => {
 });
 $('confirmar-no').addEventListener('click', () => $('confirmar').close());
 
+function mostrarListo(ml, aviso) {
+  $('listo-texto').textContent = `Quedó publicada${ml.id ? ` (${ml.id})` : ''}.${aviso ? ' ' + aviso : ''}`;
+  $('listo-link').href = ml.permalink || '#';
+  $('listo-link').hidden = !ml.permalink;
+  local('vendeloya.actual', null);
+  pantalla('listo');
+}
+
 $('confirmar-si').addEventListener('click', async () => {
   $('confirmar').close();
   esperar('Publicando…');
   try {
     const r = await api('/api/publicar', { publicacion: leerPublicacion(), fotos: fotosParaEnviar() });
-    $('listo-texto').textContent = `Quedó publicada (${r.id}, estado ${r.estado}).${r.avisoDescripcion ? ' ' + r.avisoDescripcion : ''}`;
-    $('listo-link').href = r.permalink;
-    $('paso-fotos').hidden = true;
-    $('paso-revision').hidden = true;
-    $('paso-listo').hidden = false;
+    estado.estadoReg = 'publicada';
+    await guardar({ ml: { id: r.id, permalink: r.permalink } });
+    mostrarListo(r, r.avisoDescripcion);
   } catch (e) {
     avisos($('resultado-revision'), 'error', `No se publicó: ${e.message}`);
   } finally {
@@ -354,33 +590,29 @@ $('confirmar-si').addEventListener('click', async () => {
   }
 });
 
-function empezarDeNuevo() {
-  estado.fotos = [];
-  estado.analisis = null;
-  estado.atributos = [];
-  dibujarFotos();
-  tocado();
-  $('paso-revision').hidden = true;
-  $('paso-listo').hidden = true;
-  $('paso-fotos').hidden = false;
-  scrollTo({ top: 0 });
-}
-$('empezar').addEventListener('click', () => { if (confirm('¿Descartar esta publicación?')) empezarDeNuevo(); });
-$('otra').addEventListener('click', empezarDeNuevo);
-
 /* ---------- modo demo ---------- */
 
-async function apiDemo(ruta, cuerpo) {
-  await new Promise(r => setTimeout(r, 600));
+/* Los registros del demo viven en sessionStorage: sobreviven a una recarga
+   (para probar el "retomar") pero no se mezclan con nada real. */
+function demoRegs(nuevo) {
+  try {
+    if (nuevo) sessionStorage.setItem('vendeloya.demo', JSON.stringify(nuevo));
+    return JSON.parse(sessionStorage.getItem('vendeloya.demo') || '{}');
+  } catch { return {}; }
+}
+
+async function apiDemo(ruta, cuerpo, metodo) {
+  await new Promise(r => setTimeout(r, 400));
   const atributos = [
     { id: 'BRAND', nombre: 'Marca', tipo: 'string', requerido: true, unidades: [], opciones: [], valor: 'Black+Decker' },
     { id: 'MODEL', nombre: 'Modelo', tipo: 'string', requerido: true, unidades: [], opciones: [], valor: '' },
     { id: 'POWER', nombre: 'Potencia', tipo: 'number_unit', requerido: false, unidades: ['W'], opciones: [], valor: '500 W' },
-    { id: 'COLOR', nombre: 'Color', tipo: 'list', requerido: false, unidades: [], opciones: [{ id: '1', nombre: 'Naranja' }, { id: '2', nombre: 'Negro' }], valor: 'Naranja' }
+    { id: 'COLOR', nombre: 'Color', tipo: 'list', requerido: false, unidades: [], opciones: [{ id: '1', nombre: 'Naranja' }, { id: '2', nombre: 'Negro' }], valor: 'Naranja' },
+    { id: 'WEIGHT', nombre: 'Peso', tipo: 'number_unit', requerido: false, unidades: ['kg'], opciones: [], valor: '' }
   ];
   const categoria = { id: 'MLA5232', nombre: 'Herramientas › Taladros › De Mano', maxTitulo: 60, pideGtin: true,
     tiposPublicacion: [{ id: 'gold_special', nombre: 'Clásica' }, { id: 'gold_pro', nombre: 'Premium' }, { id: 'free', nombre: 'Gratuita' }] };
-  if (ruta === '/api/estado') return { conectado: true, nickname: 'DEMO (sin cuenta)', userProducts: true };
+  if (ruta === '/api/estado') return { conectado: true, nickname: 'DEMO', userProducts: true };
   if (ruta === '/api/analizar') return {
     identificacion: { producto: 'Taladro percutor eléctrico', estado_detalle: 'Uso visible en el mandril, carcasa sana.',
       advertencias: ['No se ve el modelo: buscalo en la etiqueta de abajo.'], confianza: 'media' },
@@ -400,7 +632,28 @@ async function apiDemo(ruta, cuerpo) {
       : { ok: true, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`),
           avisos: cuerpo.publicacion.envio === 'retiro' ? [] : ['Este producto no entra en Mercado Envíos (por tamaño o categoría): el envío queda a acordar con el comprador.'] };
   }
-  if (ruta === '/api/publicar') return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo (no se publicó nada)' };
+  if (ruta === '/api/publicar') return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
+
+  const regs = demoRegs();
+  if (ruta === '/api/registros') {
+    const lista = Object.values(regs).sort((a, b) => (b.actualizado || '').localeCompare(a.actualizado || ''));
+    return { registros: lista.map(r => ({ id: r.id, creado: r.creado, actualizado: r.actualizado, estado: r.estado || 'borrador',
+      titulo: r.publicacion?.titulo || r.analisis?.propuesta?.titulo || 'Sin título',
+      precio: Number(r.publicacion?.precio || r.analisis?.propuesta?.precio) || 0, thumb: r.thumb || '', permalink: r.ml?.permalink || '' })) };
+  }
+  const m = /^\/api\/registros\/(.+)$/.exec(ruta);
+  if (m) {
+    const id = m[1];
+    if (metodo === 'PUT') {
+      const ahora = new Date().toISOString();
+      regs[id] = { ...(regs[id] || { id, creado: ahora }), ...cuerpo, actualizado: ahora };
+      demoRegs(regs);
+      return { ok: true };
+    }
+    if (metodo === 'DELETE') { delete regs[id]; demoRegs(regs); return { ok: true }; }
+    if (!regs[id]) throw new Error('Ese registro ya no existe.');
+    return regs[id];
+  }
   throw new Error('Ruta demo desconocida');
 }
 
@@ -409,4 +662,7 @@ async function apiDemo(ruta, cuerpo) {
 if (DEMO) document.title = 'VendeloYa (demo)';
 dibujarFotos();
 refrescarCuenta();
+cargarHistorial();
+// Si había algo abierto (se recargó la página o se cerró la app), se retoma.
+if (local('vendeloya.actual') && (clave() || DEMO)) abrirRegistro(local('vendeloya.actual'), { silencioso: true });
 if ('serviceWorker' in navigator && !DEMO) navigator.serviceWorker.register('sw.js').catch(() => {});

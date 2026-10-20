@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   elegirAtributos, atributoParaML, recortarTitulo, limpiarDescripcion,
-  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas
+  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -154,6 +154,23 @@ test('armarItem: solo retiro en persona', () => {
   assert.equal(armarItem(base, { userProducts: true }).shipping, undefined);
   assert.deepEqual(armarItem({ ...base, envio: 'retiro' }, { userProducts: true }).shipping,
     { mode: 'not_specified', local_pick_up: true, free_shipping: false });
+});
+
+test('resumenRegistro: lo editado gana sobre la propuesta de la IA', () => {
+  const reg = { id: 'abc12345', creado: 'c', actualizado: 'a', estado: 'publicada', thumb: 'data:x',
+    analisis: { propuesta: { titulo: 'De la IA', precio: 100 } },
+    publicacion: { titulo: 'Editado', precio: '250' }, ml: { permalink: 'https://x' } };
+  assert.deepEqual(resumenRegistro(reg), { id: 'abc12345', creado: 'c', actualizado: 'a', titulo: 'Editado',
+    precio: 250, estado: 'publicada', thumb: 'data:x', permalink: 'https://x' });
+  const recien = resumenRegistro({ id: 'x', analisis: { propuesta: { titulo: 'De la IA', precio: 100 } } });
+  assert.equal(recien.titulo, 'De la IA');
+  assert.equal(recien.estado, 'borrador');
+});
+
+test('actualizarIndice: arriba de todo, sin duplicados y con tope', () => {
+  const idx = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  assert.deepEqual(actualizarIndice(idx, { id: 'b', t: 1 }).map(r => r.id), ['b', 'a', 'c']);
+  assert.deepEqual(actualizarIndice(idx, { id: 'd' }, 3).map(r => r.id), ['d', 'a', 'b']);
 });
 
 console.log(`\n${n} tests en verde`);

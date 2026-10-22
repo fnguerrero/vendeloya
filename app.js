@@ -80,7 +80,7 @@ async function api(ruta, cuerpo, metodo) {
   if (DEMO) return apiDemo(ruta, cuerpo, metodo);
   // El estado se pide igual sin clave: así se entera de si al Worker le faltan secretos.
   if (!clave() && ruta !== '/api/estado') {
-    $('ajustes').open = true;
+    abrirConfig();
     throw new Error('Cargá la clave de la app en Ajustes.');
   }
   const res = await fetch(window.VENDELOYA.worker + ruta, {
@@ -115,6 +115,8 @@ function pantalla(cual) {
   $('historial').hidden = cual !== 'inicio';
   $('paso-revision').hidden = cual !== 'revision';
   $('paso-listo').hidden = cual !== 'listo';
+  // En la revisión la página se ensancha para la columna de la IA (en la compu).
+  document.body.classList.toggle('revisando', cual === 'revision');
   scrollTo({ top: 0 });
 }
 
@@ -128,23 +130,60 @@ async function refrescarCuenta() {
     b.textContent = e.conectado ? e.nickname : e.faltan?.length ? 'Falta configurar' : 'Conectar MercadoLibre';
     b.classList.toggle('conectada', !!e.conectado);
     b.dataset.conectada = e.conectado ? '1' : '';
+    b.dataset.nickname = e.nickname || '';
   } catch (err) {
     b.dataset.faltan = err.faltan ? err.faltan.join(', ') : '';
     b.textContent = err.faltan ? 'Falta configurar' : clave() ? 'Sin conexión' : 'Falta la clave';
     b.classList.remove('conectada');
     b.dataset.conectada = '';
+    b.dataset.nickname = '';
   }
+  pintarConfig();
 }
 
-$('cuenta').addEventListener('click', () => {
+/* ---------- configuración ---------- */
+
+function pintarConfig() {
+  const b = $('cuenta');
+  const conectada = !!b.dataset.conectada;
+  $('config-cuenta').textContent = b.dataset.faltan
+    ? `Al Worker le faltan secretos: ${b.dataset.faltan}. Se cargan con tools/cargar-secretos.ps1.`
+    : !clave() && !DEMO ? 'Primero cargá la clave de la app, acá abajo.'
+    : conectada ? `Conectada como ${b.dataset.nickname}.` : 'No hay ninguna cuenta conectada.';
+  $('conectar-ml').textContent = conectada ? 'Volver a conectar' : 'Conectar MercadoLibre';
+  $('conectar-ml').disabled = !!b.dataset.faltan || (!clave() && !DEMO);
+  $('desconectar-ml').hidden = !conectada;
+  $('cerrar-sesion').hidden = !clave();
+}
+
+function abrirConfig() {
+  pintarConfig();
+  $('config').showModal();
+}
+$('abrir-config').addEventListener('click', abrirConfig);
+$('cuenta').addEventListener('click', abrirConfig);
+$('cerrar-config').addEventListener('click', () => $('config').close());
+
+$('conectar-ml').addEventListener('click', () => {
   if (DEMO) return;
-  if ($('cuenta').dataset.faltan) {
-    alert(`Al Worker le faltan estos secretos: ${$('cuenta').dataset.faltan}.\nSe cargan con tools/cargar-secretos.ps1 (está en el README).`);
-    return;
-  }
-  if (!clave()) { $('ajustes').open = true; $('clave').focus(); return; }
-  if ($('cuenta').dataset.conectada && !confirm('La cuenta ya está conectada. ¿Volver a conectarla?')) return;
   window.open(`${window.VENDELOYA.worker}/oauth/start?k=${encodeURIComponent(clave())}`, '_blank', 'noopener');
+});
+
+$('desconectar-ml').addEventListener('click', async () => {
+  if (!confirm('¿Desconectar tu cuenta de MercadoLibre? Para volver a publicar vas a tener que conectarla de nuevo.')) return;
+  try {
+    await api('/api/desconectar', {});
+    toast('Cuenta de MercadoLibre desconectada.');
+  } catch (e) { alert(e.message); }
+  refrescarCuenta();
+});
+
+$('cerrar-sesion').addEventListener('click', () => {
+  local('vendeloya.clave', null);
+  local('vendeloya.actual', null);
+  toast('Sesión cerrada en este dispositivo.');
+  volverAlInicio();
+  refrescarCuenta();
 });
 // Al volver de la pestaña de MercadoLibre (o de otra app), se mira si quedó conectada.
 document.addEventListener('visibilitychange', () => {
@@ -156,7 +195,7 @@ document.addEventListener('visibilitychange', () => {
 $('guardar-clave').addEventListener('click', () => {
   local('vendeloya.clave', $('clave').value.trim());
   $('clave').value = '';
-  $('ajustes').open = false;
+  toast('Clave guardada.');
   refrescarCuenta();
   cargarHistorial();
 });
@@ -257,7 +296,7 @@ function mostrarRevision(r, guardada) {
   $('precio').value = p.precio || '';
   $('descripcion').value = p.descripcion || '';
   $('garantia').value = p.garantia || '';
-  $('envio').value = p.envio || '';
+  $('envio').value = p.envio ?? 'retiro';
   $('cantidad').value = p.cantidad || 1;
 
   const categoria = guardada?.categoriaDatos || r.categoria;
@@ -266,15 +305,8 @@ function mostrarRevision(r, guardada) {
   $('categoria').replaceChildren(...categorias.map(c => opcion(c.id, c.nombre, c.id === categoria.id)));
   dibujarCategoria(categoria, guardada?.atributos || r.atributos, p.tipoPublicacion);
 
-  const pr = r.precio;
-  $('precio-fuente').textContent = pr.fuente === 'mercadolibre'
-    ? `Mediana de ${pr.muestras} publicaciones parecidas (entre ${pesos(pr.min)} y ${pesos(pr.max)}).`
-    : `Estimado por la IA, entre ${pesos(pr.min)} y ${pesos(pr.max)}. Conviene chequearlo en MercadoLibre.`;
-
-  const id = r.identificacion;
-  const lista = [`Estado: ${id.estado_detalle}`, ...(id.advertencias || [])];
-  if (id.confianza !== 'alta') lista.unshift(`La IA tiene confianza ${id.confianza} en lo que identificó.`);
-  avisos($('avisos-ia'), '', `Identificado: ${id.producto}`, lista);
+  dibujarPrecio(r.precio);
+  dibujarIA(r.identificacion);
 
   $('fotos-revision').replaceChildren(...estado.fotos.map((f, i) => {
     const img = document.createElement('img');
@@ -289,6 +321,56 @@ function mostrarRevision(r, guardada) {
   estado.revisada = false;
   $('publicar').disabled = true;
   pantalla('revision');
+}
+
+/* ---------- precio destacado ---------- */
+
+function dibujarPrecio(pr) {
+  estado.rango = pr;
+  $('precio-fuente').textContent = pr.fuente === 'mercadolibre'
+    ? `Mediana de ${pr.muestras} publicaciones parecidas en MercadoLibre.`
+    : 'Estimado por la IA a partir de las fotos. Conviene comparar con publicaciones parecidas.';
+  const botones = { min: `Mínimo ${pesos(pr.min)}`, sugerido: `Sugerido ${pesos(pr.valor)}`, max: `Máximo ${pesos(pr.max)}` };
+  for (const b of document.querySelectorAll('.rango-btn')) b.textContent = botones[b.dataset.precio];
+  $('precio-rango').hidden = !(pr.min > 0 && pr.max > pr.min);
+  marcarPrecio();
+}
+
+/** Ubica el precio actual en la barra de mínimo a máximo y marca el botón que coincide. */
+function marcarPrecio() {
+  const pr = estado.rango;
+  if (!pr || !(pr.max > pr.min)) return;
+  const v = Number($('precio').value) || 0;
+  const pct = Math.max(0, Math.min(100, ((v - pr.min) / (pr.max - pr.min)) * 100));
+  $('rango-marca').style.left = `${pct}%`;
+  $('rango-relleno').style.width = `${pct}%`;
+  const valores = { min: pr.min, sugerido: pr.valor, max: pr.max };
+  for (const b of document.querySelectorAll('.rango-btn')) b.classList.toggle('activo', valores[b.dataset.precio] === v);
+}
+
+for (const b of document.querySelectorAll('.rango-btn')) {
+  b.addEventListener('click', () => {
+    const pr = estado.rango;
+    $('precio').value = { min: pr.min, sugerido: pr.valor, max: pr.max }[b.dataset.precio];
+    $('precio').dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+$('precio').addEventListener('input', marcarPrecio);
+
+/* ---------- lo que vio la IA (columna derecha) ---------- */
+
+const CONFIANZA = { alta: { pct: 90, txt: 'Alta' }, media: { pct: 60, txt: 'Media' }, baja: { pct: 30, txt: 'Baja' } };
+
+function dibujarIA(id) {
+  $('ia-producto').textContent = id.producto || '';
+  const c = CONFIANZA[id.confianza] || CONFIANZA.media;
+  $('confianza-valor').textContent = c.txt;
+  $('confianza-relleno').style.width = `${c.pct}%`;
+  $('confianza-relleno').className = `nivel-${id.confianza || 'media'}`;
+  $('ia-estado').textContent = id.estado_detalle || '';
+  const consejos = id.advertencias || [];
+  $('ia-consejos').replaceChildren(...consejos.map(t => { const li = document.createElement('li'); li.textContent = t; return li; }));
+  $('ia-consejos-titulo').hidden = !consejos.length;
 }
 
 function campoAtributo(a) {
@@ -325,16 +407,20 @@ function dibujarCategoria(categoria, atributos, tipoElegido) {
   const elegido = tipos.some(t => t.id === tipoElegido) ? tipoElegido : tipos[0].id;
   $('tipo').replaceChildren(...tipos.map(t => opcion(t.id, t.nombre, t.id === elegido)));
 
-  const requeridos = atributos.filter(a => a.requerido);
+  // A la vista solo lo obligatorio que quedó vacío; el resto, en "Más datos".
+  const faltan = atributos.filter(a => a.requerido && !String(a.valor ?? '').trim());
+  const listos = atributos.filter(a => a.requerido && String(a.valor ?? '').trim());
   const opcionales = atributos.filter(a => !a.requerido);
-  $('atributos').replaceChildren(...requeridos.map(campoAtributo));
+  $('atributos').replaceChildren(...faltan.map(campoAtributo));
+  $('atributos-listos').replaceChildren(...listos.map(campoAtributo));
   $('atributos-opcionales').replaceChildren(...opcionales.map(campoAtributo));
-  $('bloque-requeridos').hidden = !requeridos.length;
+  $('bloque-requeridos').hidden = !faltan.length;
+  $('bloque-listos').hidden = !listos.length;
   $('bloque-opcionales').hidden = !opcionales.length;
-  const completos = opcionales.filter(a => a.valor).length;
-  $('mas-titulo').textContent = opcionales.length
-    ? `Más datos (opcional · ${completos} de ${opcionales.length} completos)`
-    : 'Más datos (opcional)';
+  const partes = ['envío y venta'];
+  if (listos.length) partes.push(`${listos.length} obligatorio${listos.length > 1 ? 's' : ''} completo${listos.length > 1 ? 's' : ''}`);
+  if (opcionales.length) partes.push(`${opcionales.length} opcional${opcionales.length > 1 ? 'es' : ''}`);
+  $('mas-titulo').textContent = `Más datos · ${partes.join(' · ')}`;
 }
 
 $('categoria').addEventListener('change', async () => {
@@ -612,7 +698,11 @@ async function apiDemo(ruta, cuerpo, metodo) {
   ];
   const categoria = { id: 'MLA5232', nombre: 'Herramientas › Taladros › De Mano', maxTitulo: 60, pideGtin: true,
     tiposPublicacion: [{ id: 'gold_special', nombre: 'Clásica' }, { id: 'gold_pro', nombre: 'Premium' }, { id: 'free', nombre: 'Gratuita' }] };
-  if (ruta === '/api/estado') return { conectado: true, nickname: 'DEMO', userProducts: true };
+  const desconectada = (() => { try { return sessionStorage.getItem('vendeloya.demo.sinml') === '1'; } catch { return false; } })();
+  if (ruta === '/api/estado') return desconectada ? { conectado: false } : { conectado: true, nickname: 'DEMO', userProducts: true };
+  if (ruta === '/api/desconectar') { try { sessionStorage.setItem('vendeloya.demo.sinml', '1'); } catch {} return { ok: true }; }
+  atributos.push({ id: 'VALUE_ADDED_TAX', nombre: 'IVA', tipo: 'list', requerido: true, unidades: [], valor: 'Exento',
+    opciones: ['Exento', '0 %', '10.5 %', '21 %', '27 %'].map((nombre, i) => ({ id: String(i), nombre })) });
   if (ruta === '/api/analizar') return {
     identificacion: { producto: 'Taladro percutor eléctrico', estado_detalle: 'Uso visible en el mandril, carcasa sana.',
       advertencias: ['No se ve el modelo: buscalo en la etiqueta de abajo.'], confianza: 'media' },

@@ -13,6 +13,7 @@
      POST /api/categoria         otra categoría → sus atributos
      POST /api/revisar           sube fotos y valida SIN publicar
      POST /api/publicar          publica de verdad + descripción
+     POST /api/desconectar       borra el token de MercadoLibre (cerrar sesión)
      GET  /api/registros         historial (resúmenes)
      GET|PUT|DELETE /api/registros/<id>   un borrador o publicación guardada
 
@@ -251,6 +252,24 @@ function faltanSecretos(env) {
   return ['ML_CLIENT_ID', 'ML_CLIENT_SECRET', 'ANTHROPIC_API_KEY', 'APP_SECRET'].filter(n => !env[n]);
 }
 
+/**
+ * Desconecta la cuenta: le pide a MercadoLibre que revoque el permiso de la app
+ * (si falla, no importa) y borra los tokens guardados. Para volver a publicar
+ * hay que tocar "Conectar" de nuevo.
+ */
+async function desconectar(env) {
+  const t = await env.KV.get('ml:tokens', 'json');
+  if (t?.user_id && env.ML_CLIENT_ID) {
+    try {
+      await fetch(`${ML_API}/users/${t.user_id}/applications/${env.ML_CLIENT_ID}`, {
+        method: 'DELETE', headers: { authorization: `Bearer ${t.access_token}` }
+      });
+    } catch (e) { console.log('revocar:', e.message); }
+  }
+  await env.KV.delete('ml:tokens');
+  return { ok: true };
+}
+
 async function estado(env) {
   const faltan = faltanSecretos(env);
   if (faltan.length) return { conectado: false, faltan };
@@ -402,6 +421,7 @@ export default {
       if (Number(request.headers.get('content-length') || 0) > MAX_CUERPO) return json({ error: 'Las fotos pesan demasiado.' }, 413, origen);
 
       // Historial y borradores: /api/registros y /api/registros/<id>
+      if (url.pathname === '/api/desconectar' && request.method === 'POST') return json(await desconectar(env), 200, origen);
       if (url.pathname === '/api/registros' && request.method === 'GET') return json(await registros.listar(env), 200, origen);
       const reg = /^\/api\/registros\/([^/]+)$/.exec(url.pathname);
       if (reg) {

@@ -1,7 +1,7 @@
 /* Service worker mínimo: hace instalable la app y la abre sin señal.
    Red primero: lo cacheado es solo el respaldo. Al tocar el shell, subir VERSION. */
-const VERSION = 'vendeloya-4';
-const SHELL = ['./', 'index.html', 'styles.css?v=2', 'config.js?v=1', 'app.js?v=4', 'manifest.webmanifest', 'icon.svg'];
+const VERSION = 'vendeloya-5';
+const SHELL = ['./', 'index.html', 'styles.css?v=3', 'config.js?v=1', 'app.js?v=5', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

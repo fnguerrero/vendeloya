@@ -214,3 +214,87 @@ details.tarjeta summary { cursor: pointer; font-weight: 700; }
 dialog { border: 0; border-radius: var(--radio); padding: 20px; max-width: min(420px, calc(100vw - 32px)); background: var(--tarjeta); color: var(--texto); box-shadow: 0 8px 24px rgba(0, 0, 0, .25); }
 dialog::backdrop { background: rgba(0, 0, 0, .45); }
 dialog h2 { margin-top: 0; font-size: 1.15rem; }
+
+/* ---------- barra: acciones ---------- */
+
+.barra-acciones { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.barra-acciones .chip { max-width: 46vw; }
+.icono {
+  width: 40px; height: 40px; flex: none; display: grid; place-items: center;
+  border: 0; border-radius: 50%; background: transparent; color: inherit; font: inherit; font-size: 1.1rem; cursor: pointer;
+}
+.icono:hover { background: rgba(0, 0, 0, .08); }
+
+/* ---------- revisión en dos columnas ---------- */
+
+body.revisando main { max-width: 1120px; }
+.revision { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+.revision > * { min-width: 0; }
+/* En el celu la IA va arriba, chica; en la compu, a la derecha y fija al bajar. */
+.rev-lateral { order: -1; }
+@media (min-width: 960px) {
+  .revision { grid-template-columns: minmax(0, 1fr) 340px; }
+  .rev-lateral { order: 0; position: sticky; top: 78px; max-height: calc(100vh - 96px); overflow: auto; }
+}
+
+.rev-lateral .tira img { width: 72px; height: 72px; }
+@media (min-width: 960px) {
+  .rev-lateral .tira { display: grid; grid-template-columns: repeat(3, 1fr); }
+  .rev-lateral .tira img { width: 100%; height: auto; aspect-ratio: 1; }
+}
+.ia-producto { margin: 12px 0 8px !important; font-size: 1.05rem !important; }
+.ia-estado { margin: 10px 0 0; color: var(--suave); font-size: .9rem; }
+.rev-lateral h4 { margin: 16px 0 4px; font-size: .9rem; }
+.ia-consejos { margin: 0; padding-left: 18px; font-size: .88rem; color: var(--suave); }
+.ia-consejos li + li { margin-top: 4px; }
+
+.confianza-texto { display: flex; justify-content: space-between; font-size: .85rem; color: var(--suave); }
+.confianza-texto strong { color: var(--texto); }
+.confianza-barra { height: 8px; margin-top: 5px; border-radius: 999px; background: var(--fondo); overflow: hidden; }
+.confianza-barra > div { height: 100%; border-radius: inherit; transition: width .4s; }
+.nivel-alta { background: var(--ok); }
+.nivel-media { background: #f5a623; }
+.nivel-baja { background: var(--error); }
+
+/* ---------- precio destacado ---------- */
+
+.precio-card {
+  margin-top: 18px; padding: 14px; border-radius: var(--radio);
+  background: var(--azul-claro); border: 1px solid color-mix(in srgb, var(--azul) 25%, transparent);
+}
+.precio-label { display: block; font-weight: 800; font-size: .95rem; }
+.precio-input { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.precio-input span { font-size: 1.8rem; font-weight: 300; }
+.precio-input input {
+  flex: 1; min-width: 0; padding: 4px 10px; border: 1px solid var(--borde-campo); border-radius: var(--radio);
+  background: var(--tarjeta); color: var(--texto); font: inherit; font-size: 1.8rem; font-weight: 700;
+}
+.precio-input input:focus { outline: none; border-color: var(--azul); box-shadow: 0 0 0 1px var(--azul); }
+.rango-barra { position: relative; height: 6px; margin: 16px 6px 10px; border-radius: 999px; background: color-mix(in srgb, var(--azul) 20%, transparent); }
+.rango-relleno { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: var(--azul); }
+.rango-marca {
+  position: absolute; top: 50%; width: 16px; height: 16px; border-radius: 50%; transform: translate(-50%, -50%);
+  background: var(--tarjeta); border: 3px solid var(--azul);
+}
+.rango-botones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.rango-btn {
+  padding: 7px 4px; border: 1px solid transparent; border-radius: var(--radio); background: var(--tarjeta);
+  color: var(--texto); font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer;
+}
+.rango-btn.sugerido { font-weight: 800; }
+.rango-btn.activo { border-color: var(--azul); color: var(--azul); }
+.precio-card .ayuda { margin-bottom: 0; }
+
+/* ---------- lo que falta ---------- */
+
+.falta { margin-top: 18px; padding: 2px 14px 14px; border-radius: var(--radio); background: var(--aviso-fondo); }
+.falta h3 { margin-top: 12px !important; }
+.mas h3 { margin-top: 18px; padding-top: 12px; border-top: 1px dashed var(--borde); }
+.mas > h3:first-of-type { border-top: 0; padding-top: 0; }
+
+/* ---------- configuración ---------- */
+
+.boton.peligro { background: var(--error-fondo); color: var(--error); }
+dialog.config { width: min(480px, calc(100vw - 32px)); }
+dialog.config h3 { margin: 18px 0 4px; font-size: 1rem; }
+dialog.config .titulo-seccion h2 { margin: 0; }

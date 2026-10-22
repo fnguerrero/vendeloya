@@ -23,7 +23,7 @@
 
 import { identificar, completarAtributos } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, separarCausas, CONDICIONES } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, CONDICIONES } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -241,7 +241,7 @@ async function atributosCompletos(env, identificacion, categoria) {
   const { json: r } = await completarAtributos(env, identificacion, categoria.atributos);
   const valores = new Map((r.atributos || []).map(a => [a.id, a.valor]));
   const completos = categoria.atributos.map(a => ({ ...a, valor: valores.get(a.id) || '' }));
-  return aplicarGtin(completos, identificacion?.codigo_barras);
+  return aplicarDefaults(aplicarGtin(completos, identificacion?.codigo_barras));
 }
 
 /* ---------- rutas de la app ---------- */
@@ -301,7 +301,9 @@ async function analizar(env, cuerpo) {
       precio: precio.valor,
       categoria: categoria.id,
       tipoPublicacion: categoria.tiposPublicacion.some(t => t.id === 'gold_special') ? 'gold_special' : categoria.tiposPublicacion[0]?.id || 'gold_special',
-      garantia: id.condicion === 'nuevo' ? '' : 'Sin garantía'
+      garantia: id.condicion === 'nuevo' ? '' : 'Sin garantía',
+      // Por defecto lo retiran en persona (pedido de Nico, 22/10/2026); se cambia en la revisión.
+      envio: 'retiro'
     }
   };
 }

@@ -27,7 +27,13 @@ const SCHEMA_IDENTIFICACION = {
     modelo: { type: 'string', description: 'Modelo visible, o cadena vacía si no se ve.' },
     condicion: { type: 'string', enum: ['nuevo', 'usado', 'reacondicionado'] },
     estado_detalle: { type: 'string', description: 'Estado real que se ve en las fotos: marcas de uso, faltantes, caja. Honesto.' },
-    descripcion: { type: 'string', description: 'Descripción en texto plano para la publicación, en español rioplatense neutro, sin emojis ni HTML. Qué es, estado, qué incluye.' },
+    descripcion: {
+      type: 'string',
+      description: 'Descripción en texto plano para la publicación, en español rioplatense neutro, sin emojis ni HTML. ' +
+        'Separada en párrafos cortos con una línea en blanco entre cada uno (\\n\\n), nunca un bloque corrido: ' +
+        '1) una frase de qué es; 2) características (material, medidas si se ven, detalles), una por línea con "- "; ' +
+        '3) estado real; 4) qué incluye y qué no; 5) entrega o retiro y una invitación a consultar.'
+    },
     caracteristicas: {
       type: 'array',
       description: 'Datos que se ven o se deducen con seguridad de las fotos (color, material, medidas, potencia, capacidad...).',

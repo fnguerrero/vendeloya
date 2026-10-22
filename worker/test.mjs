@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   elegirAtributos, atributoParaML, recortarTitulo, limpiarDescripcion,
-  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice
+  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice, aplicarDefaults
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -171,6 +171,28 @@ test('actualizarIndice: arriba de todo, sin duplicados y con tope', () => {
   const idx = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
   assert.deepEqual(actualizarIndice(idx, { id: 'b', t: 1 }).map(r => r.id), ['b', 'a', 'c']);
   assert.deepEqual(actualizarIndice(idx, { id: 'd' }, 3).map(r => r.id), ['d', 'a', 'b']);
+});
+
+test('aplicarDefaults: Modelo NA, IVA Exento, impuesto interno 0 % y GTIN sin asterisco', () => {
+  const attrs = [
+    { id: 'MODEL', nombre: 'Modelo', requerido: true, opciones: [], valor: '' },
+    { id: 'VALUE_ADDED_TAX', nombre: 'IVA', requerido: true, valor: '',
+      opciones: ['Exento', '0 %', '10.5 %', '21 %', '27 %'].map((nombre, i) => ({ id: String(i), nombre })) },
+    { id: 'IMPORT_DUTY', nombre: 'Impuesto interno', requerido: true, valor: '',
+      opciones: ['0 %', '5 %'].map((nombre, i) => ({ id: String(i), nombre })) },
+    { id: 'GTIN', nombre: 'Código universal de producto', requerido: true, opciones: [], valor: '' },
+    { id: 'BRAND', nombre: 'Marca', requerido: true, opciones: [], valor: '' }
+  ];
+  const r = Object.fromEntries(aplicarDefaults(attrs).map(a => [a.id, a]));
+  assert.equal(r.MODEL.valor, 'NA');
+  assert.equal(r.VALUE_ADDED_TAX.valor, 'Exento');
+  assert.equal(r.IMPORT_DUTY.valor, '0 %');
+  assert.equal(r.GTIN.requerido, false);
+  assert.equal(r.BRAND.valor, '');
+  // Lo que ya vino completo no se pisa.
+  assert.equal(aplicarDefaults([{ ...attrs[0], valor: 'KR504' }])[0].valor, 'KR504');
+  // Con el GTIN vacío no frena: faltantes no lo cuenta.
+  assert.deepEqual(faltantes({ ...base, atributos: aplicarDefaults(attrs).filter(a => a.id !== 'BRAND') }), []);
 });
 
 console.log(`\n${n} tests en verde`);

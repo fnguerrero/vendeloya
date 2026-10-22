@@ -198,6 +198,29 @@ export function actualizarIndice(indice, resumen, max = MAX_HISTORIAL) {
   return [resumen, ...indice.filter(r => r.id !== resumen.id)].slice(0, max);
 }
 
+/* Valores por defecto que eligió Nico (22/10/2026) para lo que MercadoLibre pide
+   y casi nunca cambia en ventas de particular. Solo se usan si el campo quedó vacío. */
+const POR_DEFECTO = {
+  MODEL: 'NA',
+  VALUE_ADDED_TAX: 'Exento',
+  IMPORT_DUTY: '0 %'
+};
+
+/**
+ * Completa los vacíos con los valores por defecto, y saca el asterisco al
+ * código de barras: si no hay, armarItem manda EMPTY_GTIN_REASON solo
+ * ("El producto no tiene código registrado"), así que no tiene por qué frenar.
+ */
+export function aplicarDefaults(atributos) {
+  return atributos.map(a => {
+    if (a.id === 'GTIN') return { ...a, requerido: false, nombre: 'Código de barras (solo si tiene)' };
+    const defecto = POR_DEFECTO[a.id];
+    if (!defecto || String(a.valor ?? '').trim()) return a;
+    const enLista = !a.opciones?.length || a.opciones.some(o => o.nombre === defecto);
+    return enLista ? { ...a, valor: defecto } : a;
+  });
+}
+
 /** Qué falta antes de poder siquiera validar. Lista vacía = se puede mandar. */
 export function faltantes(p) {
   const f = [];

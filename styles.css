@@ -227,24 +227,12 @@ dialog h2 { margin-top: 0; font-size: 1.15rem; }
 
 /* ---------- revisión en dos columnas ---------- */
 
-body.revisando main { max-width: 1120px; }
+body.revisando main { max-width: 760px; }
 .revision { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
 .revision > * { min-width: 0; }
-/* En el celu la IA va arriba, chica; en la compu, a la derecha y fija al bajar. */
-.rev-lateral { order: -1; }
-@media (min-width: 960px) {
-  .revision { grid-template-columns: minmax(0, 1fr) 340px; }
-  .rev-lateral { order: 0; position: sticky; top: 78px; max-height: calc(100vh - 96px); overflow: auto; }
-}
-
-.rev-lateral .tira img { width: 72px; height: 72px; }
-@media (min-width: 960px) {
-  .rev-lateral .tira { display: grid; grid-template-columns: repeat(3, 1fr); }
-  .rev-lateral .tira img { width: 100%; height: auto; aspect-ratio: 1; }
-}
 .ia-producto { margin: 12px 0 8px !important; font-size: 1.05rem !important; }
 .ia-estado { margin: 10px 0 0; color: var(--suave); font-size: .9rem; }
-.rev-lateral h4 { margin: 16px 0 4px; font-size: .9rem; }
+.col-ia h4 { margin: 16px 0 4px; font-size: .9rem; }
 .ia-consejos { margin: 0; padding-left: 18px; font-size: .88rem; color: var(--suave); }
 .ia-consejos li + li { margin-top: 4px; }
 
@@ -298,3 +286,69 @@ body.revisando main { max-width: 1120px; }
 dialog.config { width: min(480px, calc(100vw - 32px)); }
 dialog.config h3 { margin: 18px 0 4px; font-size: 1rem; }
 dialog.config .titulo-seccion h2 { margin: 0; }
+
+/* =========================================================
+   Revisión en tres columnas (v4): sin scroll de página en la compu.
+   La página es una columna flex de alto completo; cada columna
+   scrollea por dentro solo si no le alcanza el espacio.
+   ========================================================= */
+
+.col { display: flex; flex-direction: column; min-height: 0; }
+.col-scroll { min-height: 0; }
+.col .titulo-seccion { margin-bottom: 4px; }
+
+.col-ia .tira { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.col-ia .tira img { width: 100%; height: auto; aspect-ratio: 1; }
+
+.precio-card { margin-top: 14px; padding: 12px 14px; }
+.precio-fila { display: flex; align-items: center; gap: 12px; }
+.precio-fila .precio-input { flex: 1; min-width: 0; margin-top: 0; }
+.rango-barra { margin: 14px 6px 8px; }
+.precio-card .ayuda { margin-top: 6px; font-size: .8rem; }
+
+.campo-descripcion textarea { min-height: 160px; }
+
+.falta { margin-top: 0; }
+.falta h3 { margin: 12px 0 0 !important; }
+
+.grupo { border-top: 1px solid var(--borde); padding: 10px 0; }
+.grupo:first-of-type { margin-top: 10px; }
+.grupo summary {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  cursor: pointer; list-style: none; font-weight: 700;
+}
+.grupo summary::-webkit-details-marker { display: none; }
+.grupo summary span::before { content: "▸ "; color: var(--azul); }
+.grupo[open] summary span::before { content: "▾ "; }
+.grupo summary small { color: var(--suave); font-weight: 600; font-size: .8rem; text-align: right; }
+
+.acciones { padding-top: 12px; border-top: 1px solid var(--borde); margin-top: 12px; }
+.acciones .boton.principal { margin-top: 10px; font-size: 1.05rem; min-height: 52px; }
+.acciones .avisos { margin-top: 0; max-height: 30vh; overflow: auto; }
+.centrado { text-align: center; margin-bottom: 0; }
+.confirmar-avisos { margin: 0 0 8px; padding-left: 18px; color: var(--suave); font-size: .85rem; }
+.confirmar-avisos:empty { display: none; }
+
+/* Celu: apilado, con el botón Publicar siempre a mano abajo. */
+@media (max-width: 1099px) {
+  .col-ia { order: -1; }
+  .col-datos .acciones {
+    position: sticky; bottom: 0; z-index: 2; margin: 12px -16px -18px; padding: 10px 16px calc(12px + env(safe-area-inset-bottom));
+    background: var(--tarjeta); box-shadow: 0 -2px 6px rgba(0, 0, 0, .08); border-top: 0;
+  }
+  .col-datos .acciones .ayuda { display: none; }
+}
+
+/* Compu: tres columnas que llenan la ventana. */
+@media (min-width: 1100px) and (min-height: 560px) {
+  body.revisando { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+  body.revisando main { flex: 1; min-height: 0; max-width: none; width: 100%; padding: 12px 16px; display: block; }
+  .revision { height: 100%; grid-template-columns: 290px minmax(0, 1fr) 380px; align-items: stretch; }
+  .revision .col { height: 100%; overflow: hidden; }
+  .revision .col-scroll { flex: 1; overflow: auto; }
+  .col-centro { overflow: auto !important; }
+  .col-centro .campo:first-child { margin-top: 0; }
+  .campo-descripcion { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .campo-descripcion textarea { flex: 1; min-height: 120px; resize: none; }
+  .col-datos .acciones { margin-top: auto; }
+}

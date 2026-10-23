@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700;6..12,800&display=swap">
-  <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
   <header class="barra">
@@ -54,15 +54,27 @@
       <ul id="historial-lista" class="historial"></ul>
     </section>
 
-    <!-- Revisión: en la compu, campos en el centro y la IA a la derecha -->
+    <!-- Revisión: en la compu, tres columnas a pantalla completa (IA · lo principal · datos y Publicar) -->
     <section id="paso-revision" class="revision" hidden>
-      <div class="rev-principal tarjeta">
+      <aside class="col col-ia tarjeta">
         <div class="titulo-seccion">
           <button id="volver" class="enlace" type="button">‹ Volver</button>
           <span id="guardado" class="guardado" aria-live="polite"></span>
         </div>
-        <h2>Revisá antes de publicar</h2>
+        <div class="col-scroll">
+          <div id="fotos-revision" class="tira"></div>
+          <h3 id="ia-producto" class="ia-producto"></h3>
+          <div class="confianza">
+            <div class="confianza-texto"><span>Confianza de la IA</span><strong id="confianza-valor"></strong></div>
+            <div class="confianza-barra"><div id="confianza-relleno"></div></div>
+          </div>
+          <p id="ia-estado" class="ia-estado"></p>
+          <h4 id="ia-consejos-titulo">Para revisar</h4>
+          <ul id="ia-consejos" class="ia-consejos"></ul>
+        </div>
+      </aside>
 
+      <div class="col col-centro tarjeta">
         <label class="campo">Título <span id="contador" class="contador"></span>
           <input id="titulo" type="text" autocomplete="off">
         </label>
@@ -81,8 +93,10 @@
         </div>
 
         <div class="precio-card">
-          <label for="precio" class="precio-label">Precio</label>
-          <div class="precio-input"><span>$</span><input id="precio" type="number" min="1" inputmode="numeric"></div>
+          <div class="precio-fila">
+            <label for="precio" class="precio-label">Precio</label>
+            <div class="precio-input"><span>$</span><input id="precio" type="number" min="1" inputmode="numeric"></div>
+          </div>
           <div id="precio-rango" class="precio-rango">
             <div class="rango-barra"><div id="rango-relleno" class="rango-relleno"></div><div id="rango-marca" class="rango-marca"></div></div>
             <div class="rango-botones">
@@ -94,73 +108,60 @@
           <p id="precio-fuente" class="ayuda"></p>
         </div>
 
-        <div id="bloque-requeridos" class="falta">
-          <h3>Falta completar</h3>
-          <p class="ayuda">MercadoLibre lo pide y la IA no lo pudo saber.</p>
-          <div id="atributos"></div>
-        </div>
-
-        <label class="campo">Descripción
-          <textarea id="descripcion" rows="9"></textarea>
+        <label class="campo campo-descripcion">Descripción
+          <textarea id="descripcion"></textarea>
         </label>
-
-        <details id="mas" class="mas">
-          <summary id="mas-titulo">Más datos</summary>
-
-          <h3>Venta</h3>
-          <label class="campo">Envío
-            <select id="envio">
-              <option value="retiro">Solo retiro en persona</option>
-              <option value="">Lo que tenga configurado mi cuenta</option>
-            </select>
-          </label>
-          <div class="dos">
-            <label class="campo">Cantidad
-              <input id="cantidad" type="number" min="1" value="1" inputmode="numeric">
-            </label>
-            <label class="campo">Tipo de publicación
-              <select id="tipo"></select>
-            </label>
-          </div>
-          <label class="campo">Garantía
-            <select id="garantia">
-              <option value="">No informar</option>
-              <option value="Sin garantía">Sin garantía</option>
-              <option value="Garantía del vendedor">Del vendedor (30 días)</option>
-            </select>
-          </label>
-
-          <div id="bloque-listos">
-            <h3>Obligatorios (ya completos)</h3>
-            <p class="ayuda">Los completó la IA o son valores por defecto. Revisalos si querés.</p>
-            <div id="atributos-listos"></div>
-          </div>
-
-          <div id="bloque-opcionales">
-            <h3>Opcionales</h3>
-            <p class="ayuda">Completarlos ayuda a que te encuentren.</p>
-            <div id="atributos-opcionales"></div>
-          </div>
-        </details>
-
-        <div id="resultado-revision" class="avisos" hidden></div>
-        <div class="fila">
-          <button id="revisar" class="boton secundario" type="button">Revisar con MercadoLibre</button>
-          <button id="publicar" class="boton principal" type="button" disabled>Publicar</button>
-        </div>
       </div>
 
-      <aside class="rev-lateral tarjeta">
-        <div id="fotos-revision" class="tira"></div>
-        <h3 id="ia-producto" class="ia-producto"></h3>
-        <div class="confianza">
-          <div class="confianza-texto"><span>Confianza de la IA</span><strong id="confianza-valor"></strong></div>
-          <div class="confianza-barra"><div id="confianza-relleno"></div></div>
+      <div class="col col-datos tarjeta">
+        <div class="col-scroll">
+          <div id="bloque-requeridos" class="falta">
+            <h3>Falta completar</h3>
+            <div id="atributos"></div>
+          </div>
+
+          <details id="grupo-venta" class="grupo">
+            <summary><span>Envío y venta</span><small id="resumen-venta"></small></summary>
+            <label class="campo">Envío
+              <select id="envio">
+                <option value="retiro">Solo retiro en persona</option>
+                <option value="">Lo que tenga configurado mi cuenta</option>
+              </select>
+            </label>
+            <div class="dos">
+              <label class="campo">Cantidad
+                <input id="cantidad" type="number" min="1" value="1" inputmode="numeric">
+              </label>
+              <label class="campo">Tipo
+                <select id="tipo"></select>
+              </label>
+            </div>
+            <label class="campo">Garantía
+              <select id="garantia">
+                <option value="">No informar</option>
+                <option value="Sin garantía">Sin garantía</option>
+                <option value="Garantía del vendedor">Del vendedor (30 días)</option>
+              </select>
+            </label>
+          </details>
+
+          <details id="bloque-listos" class="grupo">
+            <summary><span>Obligatorios ya completos</span><small id="resumen-listos"></small></summary>
+            <div id="atributos-listos"></div>
+          </details>
+
+          <details id="bloque-opcionales" class="grupo">
+            <summary><span>Opcionales</span><small id="resumen-opcionales"></small></summary>
+            <div id="atributos-opcionales"></div>
+          </details>
         </div>
-        <p id="ia-estado" class="ia-estado"></p>
-        <h4 id="ia-consejos-titulo">Para revisar</h4>
-        <ul id="ia-consejos" class="ia-consejos"></ul>
-      </aside>
+
+        <div class="acciones">
+          <div id="resultado-revision" class="avisos" hidden></div>
+          <button id="publicar" class="boton principal" type="button">Publicar</button>
+          <p class="ayuda centrado">Antes de publicar, MercadoLibre lo revisa y te pide confirmar.</p>
+        </div>
+      </div>
     </section>
 
     <!-- Publicada -->
@@ -203,6 +204,7 @@
   <dialog id="confirmar">
     <h2>¿Publicar en tu cuenta?</h2>
     <p id="confirmar-texto"></p>
+    <ul id="confirmar-avisos" class="confirmar-avisos"></ul>
     <p class="ayuda">Sale al público en MercadoLibre apenas confirmes.</p>
     <div class="fila">
       <button id="confirmar-no" class="boton secundario" type="button">Cancelar</button>
@@ -211,6 +213,6 @@
   </dialog>
 
   <script src="config.js?v=1"></script>
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

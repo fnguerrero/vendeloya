@@ -317,10 +317,16 @@ function mostrarRevision(r, guardada) {
 
   $('resultado-revision').hidden = true;
   $('guardado').textContent = '';
-  $('mas').open = false;
-  estado.revisada = false;
-  $('publicar').disabled = true;
+  for (const g of document.querySelectorAll('.grupo')) g.open = false;
+  resumirVenta();
   pantalla('revision');
+}
+
+/** Lo que se ve con el grupo "Envío y venta" cerrado. */
+function resumirVenta() {
+  const envio = $('envio').value === 'retiro' ? 'Retiro en persona' : 'Envío de la cuenta';
+  const tipo = $('tipo').selectedOptions[0]?.textContent || '';
+  $('resumen-venta').textContent = `${envio} · ${$('cantidad').value || 1} u. · ${tipo}`;
 }
 
 /* ---------- precio destacado ---------- */
@@ -417,10 +423,9 @@ function dibujarCategoria(categoria, atributos, tipoElegido) {
   $('bloque-requeridos').hidden = !faltan.length;
   $('bloque-listos').hidden = !listos.length;
   $('bloque-opcionales').hidden = !opcionales.length;
-  const partes = ['envío y venta'];
-  if (listos.length) partes.push(`${listos.length} obligatorio${listos.length > 1 ? 's' : ''} completo${listos.length > 1 ? 's' : ''}`);
-  if (opcionales.length) partes.push(`${opcionales.length} opcional${opcionales.length > 1 ? 'es' : ''}`);
-  $('mas-titulo').textContent = `Más datos · ${partes.join(' · ')}`;
+  $('resumen-listos').textContent = `${listos.length} ✓`;
+  $('resumen-opcionales').textContent = `${opcionales.filter(a => String(a.valor ?? '').trim()).length} de ${opcionales.length}`;
+  resumirVenta();
 }
 
 $('categoria').addEventListener('change', async () => {
@@ -445,12 +450,12 @@ function actualizarContador() {
 }
 $('titulo').addEventListener('input', actualizarContador);
 
-/* Cualquier cambio después de revisar obliga a revisar de nuevo, y se autoguarda. */
+/* Cualquier cambio se autoguarda (y obliga a que MercadoLibre lo revise de nuevo al publicar). */
 function tocado(e) {
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
-  estado.revisada = false;
-  $('publicar').disabled = true;
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
+  if (['envio', 'cantidad', 'tipo'].includes(e?.target?.id)) resumirVenta();
+  $('resultado-revision').hidden = true;
   programarGuardado();
 }
 $('paso-revision').addEventListener('input', tocado);
@@ -622,33 +627,35 @@ function guardarIdsDeFotos(ids = []) {
   return nuevas;
 }
 
-$('revisar').addEventListener('click', async () => {
+/**
+ * Un solo botón: primero lo revisa MercadoLibre (validador, no publica). Si
+ * está bien, se pide confirmar; si no, se muestra qué corregir y se abren los
+ * grupos de datos para encontrarlo rápido.
+ */
+$('publicar').addEventListener('click', async () => {
   esperar('MercadoLibre está revisando la publicación…');
+  let r;
   try {
-    const r = await api('/api/revisar', { publicacion: leerPublicacion(), fotos: fotosParaEnviar() });
+    r = await api('/api/revisar', { publicacion: leerPublicacion(), fotos: fotosParaEnviar() });
     const fotosNuevas = guardarIdsDeFotos(r.fotos);
-    const notas = (r.avisos || []).map(a => `Aviso: ${a}`);
-    if (r.ok) {
-      avisos($('resultado-revision'), 'ok', 'MercadoLibre la aceptó. No se publicó nada todavía.', notas);
-      estado.revisada = true;
-      estado.estadoReg = 'revisada';
-      $('publicar').disabled = false;
-    } else {
-      avisos($('resultado-revision'), 'error', 'MercadoLibre pide corregir esto:', [...(r.errores || []), ...notas]);
-      if (r.errores?.some(t => /atributo|attribute/i.test(t))) $('mas').open = true;
-    }
+    estado.estadoReg = r.ok ? 'revisada' : 'borrador';
     guardar(fotosNuevas ? { fotos: estado.fotos } : {});
   } catch (e) {
     avisos($('resultado-revision'), 'error', e.message);
+    return;
   } finally {
     esperar('');
   }
-});
-
-$('publicar').addEventListener('click', () => {
-  if (!estado.revisada) return;
+  const notas = (r.avisos || []).map(a => `Aviso: ${a}`);
+  if (!r.ok) {
+    avisos($('resultado-revision'), 'error', 'Antes de publicar, corregí esto:', [...(r.errores || []), ...notas]);
+    if (r.errores?.some(t => /atributo|attribute|falta/i.test(t))) for (const g of document.querySelectorAll('.grupo')) g.open = true;
+    return;
+  }
+  $('resultado-revision').hidden = true;
   const p = leerPublicacion();
-  $('confirmar-texto').textContent = `"${p.titulo}" a ${pesos(p.precio)}, ${p.cantidad} unidad${p.cantidad > 1 ? 'es' : ''}, ${$('tipo').selectedOptions[0]?.textContent || ''}.`;
+  $('confirmar-texto').textContent = `"${p.titulo}" a ${pesos(p.precio)}, ${p.cantidad} unidad${p.cantidad > 1 ? 'es' : ''}, ${$('tipo').selectedOptions[0]?.textContent || ''}${p.envio === 'retiro' ? ', retiro en persona' : ''}.`;
+  $('confirmar-avisos').replaceChildren(...notas.map(t => { const li = document.createElement('li'); li.textContent = t; return li; }));
   $('confirmar').showModal();
 });
 $('confirmar-no').addEventListener('click', () => $('confirmar').close());

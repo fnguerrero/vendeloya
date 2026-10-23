@@ -7,3 +7,5 @@ worker
 *.md
 wrangler-app.toml
 tools
+.nonstop
+.claude

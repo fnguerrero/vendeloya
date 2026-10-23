@@ -1,0 +1,26 @@
+{
+  "_comentario": "Permisos para el modo nonstop de VendeloYa (plantilla de la skill, ajustada: commit y push a github.com/fnguerrero van sin confirmar según CLAUDE.md; los deploys con wrangler siempre se confirman).",
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Write(./**)",
+      "Edit(./**)",
+      "Bash(node:*)",
+      "Bash(py -3:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)"
+    ],
+    "deny": [
+      "Bash(git merge:*)",
+      "Bash(rm:*)",
+      "Bash(Remove-Item:*)",
+      "Write(//C/Users/nico_/.claude/**)",
+      "Edit(//C/Users/nico_/.claude/**)"
+    ]
+  }
+}

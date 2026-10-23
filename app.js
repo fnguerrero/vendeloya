@@ -250,11 +250,31 @@ function dibujarFotos() {
     return d;
   }));
   $('analizar').disabled = !estado.fotos.length;
+  $('zona-fotos').hidden = estado.fotos.length >= MAX_FOTOS;
+  $('zona-fotos').querySelector('strong').textContent = estado.fotos.length ? 'Agregar más fotos' : 'Elegí o arrastrá tus fotos';
+  $('zona-fotos').querySelector('span').textContent = estado.fotos.length
+    ? `${estado.fotos.length} de ${MAX_FOTOS}` : 'JPG o PNG · hasta 6';
 }
 
 for (const id of ['camara', 'galeria']) {
   $(id).addEventListener('change', e => { agregarFotos([...e.target.files]); e.target.value = ''; });
 }
+
+/* En la compu: arrastrar y soltar fotos sobre la tarjeta. */
+$('paso-fotos').addEventListener('dragover', e => {
+  if (![...(e.dataTransfer?.items || [])].some(i => i.kind === 'file')) return;
+  e.preventDefault();
+  $('zona-fotos').classList.add('arrastrando');
+});
+$('paso-fotos').addEventListener('dragleave', e => {
+  if (!$('paso-fotos').contains(e.relatedTarget)) $('zona-fotos').classList.remove('arrastrando');
+});
+$('paso-fotos').addEventListener('drop', e => {
+  e.preventDefault();
+  $('zona-fotos').classList.remove('arrastrando');
+  const imagenes = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith('image/'));
+  if (imagenes.length) agregarFotos(imagenes);
+});
 
 /* ---------- análisis ---------- */
 
@@ -293,7 +313,7 @@ function mostrarRevision(r, guardada) {
   const p = guardada || r.propuesta;
   $('titulo').value = p.titulo || '';
   $('condicion').value = p.condicion || 'usado';
-  $('precio').value = p.precio || '';
+  $('precio').value = miles(p.precio);
   $('descripcion').value = p.descripcion || '';
   $('garantia').value = p.garantia || '';
   $('envio').value = p.envio ?? 'retiro';
@@ -308,17 +328,30 @@ function mostrarRevision(r, guardada) {
   dibujarPrecio(r.precio);
   dibujarIA(r.identificacion);
 
-  $('fotos-revision').replaceChildren(...estado.fotos.map((f, i) => {
+  // Foto grande arriba; las miniaturas la cambian (solo si hay más de una).
+  const elegirFoto = i => {
+    $('foto-grande').src = estado.fotos[i]?.dataUrl || '';
+    for (const [j, b] of [...$('fotos-revision').children].entries()) b.classList.toggle('activa', j === i);
+  };
+  $('fotos-revision').replaceChildren(...(estado.fotos.length > 1 ? estado.fotos : []).map((f, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'mini';
+    b.setAttribute('aria-label', `Ver foto ${i + 1}`);
     const img = document.createElement('img');
     img.src = f.dataUrl;
-    img.alt = `Foto ${i + 1}`;
-    return img;
+    img.alt = '';
+    b.append(img);
+    b.onclick = () => elegirFoto(i);
+    return b;
   }));
+  elegirFoto(0);
 
   $('resultado-revision').hidden = true;
   $('guardado').textContent = '';
   for (const g of document.querySelectorAll('.grupo')) g.open = false;
   resumirVenta();
+  actualizarChecklist();
   pantalla('revision');
 }
 
@@ -346,7 +379,7 @@ function dibujarPrecio(pr) {
 function marcarPrecio() {
   const pr = estado.rango;
   if (!pr || !(pr.max > pr.min)) return;
-  const v = Number($('precio').value) || 0;
+  const v = precioActual();
   const pct = Math.max(0, Math.min(100, ((v - pr.min) / (pr.max - pr.min)) * 100));
   $('rango-marca').style.left = `${pct}%`;
   $('rango-relleno').style.width = `${pct}%`;
@@ -357,11 +390,23 @@ function marcarPrecio() {
 for (const b of document.querySelectorAll('.rango-btn')) {
   b.addEventListener('click', () => {
     const pr = estado.rango;
-    $('precio').value = { min: pr.min, sugerido: pr.valor, max: pr.max }[b.dataset.precio];
+    $('precio').value = miles({ min: pr.min, sugerido: pr.valor, max: pr.max }[b.dataset.precio]);
     $('precio').dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
-$('precio').addEventListener('input', marcarPrecio);
+/* El precio se ve con puntos de miles ("380.000") pero por dentro es un número. */
+const precioActual = () => Number(String($('precio').value).replace(/\D/g, '')) || 0;
+const miles = n => (Number(n) > 0 ? Math.round(Number(n)).toLocaleString('es-AR') : '');
+
+$('precio').addEventListener('input', () => {
+  const el = $('precio');
+  const desdeElFinal = el.value.length - (el.selectionStart ?? el.value.length);
+  el.value = miles(precioActual());
+  // El cursor queda a la misma distancia del final, así no salta al tipear en el medio.
+  const pos = Math.max(0, el.value.length - desdeElFinal);
+  try { el.setSelectionRange(pos, pos); } catch {}
+  marcarPrecio();
+});
 
 /* ---------- lo que vio la IA (columna derecha) ---------- */
 
@@ -404,7 +449,25 @@ function campoAtributo(a) {
 }
 
 /** A la vista solo lo obligatorio; lo opcional, plegado en "Más datos". */
-function dibujarCategoria(categoria, atributos, tipoElegido) {
+/*
+ * Lo mismo que aplicarDefaults del Worker, para los borradores analizados antes
+ * del 22/10/2026: ahí el código de barras venía como obligatorio y los
+ * impuestos vacíos. Si ya vienen bien, no cambia nada.
+ */
+const POR_DEFECTO = { MODEL: 'NA', VALUE_ADDED_TAX: 'Exento', IMPORT_DUTY: '0 %' };
+
+function normalizarAtributos(atributos) {
+  return atributos.map(a => {
+    if (a.id === 'GTIN') return { ...a, requerido: false, nombre: 'Código de barras (solo si tiene)' };
+    const defecto = POR_DEFECTO[a.id];
+    if (!defecto || String(a.valor ?? '').trim()) return a;
+    const enLista = !a.opciones?.length || a.opciones.some(o => o.nombre === defecto);
+    return enLista ? { ...a, valor: defecto } : a;
+  });
+}
+
+function dibujarCategoria(categoria, atributosCrudos, tipoElegido) {
+  const atributos = normalizarAtributos(atributosCrudos);
   estado.atributos = atributos;
   estado.categoria = categoria;
   actualizarContador();
@@ -426,6 +489,7 @@ function dibujarCategoria(categoria, atributos, tipoElegido) {
   $('resumen-listos').textContent = `${listos.length} ✓`;
   $('resumen-opcionales').textContent = `${opcionales.filter(a => String(a.valor ?? '').trim()).length} de ${opcionales.length}`;
   resumirVenta();
+  actualizarChecklist();
 }
 
 $('categoria').addEventListener('change', async () => {
@@ -447,11 +511,48 @@ function actualizarContador() {
   const n = $('titulo').value.trim().length;
   $('contador').textContent = `${n}/${max}`;
   $('contador').classList.toggle('pasado', n > max);
+  $('contador').classList.toggle('cerca', n <= max && n >= max - 5);
 }
 $('titulo').addEventListener('input', actualizarContador);
 
+/* ---------- listo para publicar ---------- */
+
+/**
+ * Lo que la app puede saber antes de preguntarle a MercadoLibre: fotos, título,
+ * categoría, precio y los datos obligatorios. Devuelve los pendientes, cada uno
+ * con el elemento al que hay que ir a completarlo.
+ */
+function pendientes() {
+  const max = estado.categoria?.maxTitulo || 60;
+  const titulo = $('titulo').value.trim();
+  const faltan = [...$('paso-revision').querySelectorAll('.campo.requerido [data-id]')].filter(c => !c.value.trim());
+  const items = [
+    { ok: estado.fotos.length > 0, texto: `${estado.fotos.length || 'Sin'} foto${estado.fotos.length === 1 ? '' : 's'}` },
+    { ok: !!titulo && titulo.length <= max, texto: titulo.length > max ? `Título largo (${titulo.length}/${max})` : 'Título', el: $('titulo') },
+    { ok: !!$('categoria').value, texto: 'Categoría', el: $('categoria') },
+    { ok: precioActual() > 0, texto: precioActual() > 0 ? `Precio $ ${miles(precioActual())}` : 'Precio', el: $('precio') },
+    { ok: !faltan.length, texto: faltan.length ? `Falta${faltan.length > 1 ? 'n' : ''} ${faltan.length} dato${faltan.length > 1 ? 's' : ''} obligatorio${faltan.length > 1 ? 's' : ''}` : 'Datos obligatorios', el: faltan[0] }
+  ];
+  return { items, pendientes: items.filter(i => !i.ok) };
+}
+
+function actualizarChecklist() {
+  if ($('paso-revision').hidden && !estado.analisis) return;
+  const { items, pendientes: faltan } = pendientes();
+  $('checklist').replaceChildren(...items.map(i => {
+    const li = document.createElement('li');
+    li.className = i.ok ? 'ok' : 'pendiente';
+    li.textContent = i.texto;
+    return li;
+  }));
+  const n = faltan.length;
+  $('publicar-texto').textContent = n ? `Completá ${n === 1 ? 'lo que falta' : `${n} cosas`}` : 'Publicar';
+  $('publicar').classList.toggle('incompleto', n > 0);
+}
+
 /* Cualquier cambio se autoguarda (y obliga a que MercadoLibre lo revise de nuevo al publicar). */
 function tocado(e) {
+  actualizarChecklist();
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
   if (['envio', 'cantidad', 'tipo'].includes(e?.target?.id)) resumirVenta();
@@ -604,7 +705,7 @@ function leerPublicacion() {
     titulo: $('titulo').value.trim(),
     categoria: $('categoria').value,
     condicion: $('condicion').value,
-    precio: Number($('precio').value),
+    precio: precioActual(),
     cantidad: Number($('cantidad').value) || 1,
     tipoPublicacion: $('tipo').value,
     garantia,
@@ -633,6 +734,17 @@ function guardarIdsDeFotos(ids = []) {
  * grupos de datos para encontrarlo rápido.
  */
 $('publicar').addEventListener('click', async () => {
+  // Si falta algo que la app ya sabe, se va directo a completarlo: no hace falta preguntarle a MercadoLibre.
+  const { pendientes: faltan } = pendientes();
+  const destino = faltan.find(i => i.el)?.el;
+  if (faltan.length && destino) {
+    destino.closest('details')?.setAttribute('open', '');
+    destino.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    destino.focus({ preventScroll: true });
+    destino.closest('.campo')?.classList.add('resaltar');
+    setTimeout(() => destino.closest('.campo')?.classList.remove('resaltar'), 1600);
+    return;
+  }
   esperar('MercadoLibre está revisando la publicación…');
   let r;
   try {
@@ -701,7 +813,11 @@ async function apiDemo(ruta, cuerpo, metodo) {
     { id: 'MODEL', nombre: 'Modelo', tipo: 'string', requerido: true, unidades: [], opciones: [], valor: '' },
     { id: 'POWER', nombre: 'Potencia', tipo: 'number_unit', requerido: false, unidades: ['W'], opciones: [], valor: '500 W' },
     { id: 'COLOR', nombre: 'Color', tipo: 'list', requerido: false, unidades: [], opciones: [{ id: '1', nombre: 'Naranja' }, { id: '2', nombre: 'Negro' }], valor: 'Naranja' },
-    { id: 'WEIGHT', nombre: 'Peso', tipo: 'number_unit', requerido: false, unidades: ['kg'], opciones: [], valor: '' }
+    { id: 'WEIGHT', nombre: 'Peso', tipo: 'number_unit', requerido: false, unidades: ['kg'], opciones: [], valor: '' },
+    // Como en los borradores de antes del 22/10: el GTIN llegaba como obligatorio.
+    { id: 'GTIN', nombre: 'Código universal de producto', tipo: 'string', requerido: true, unidades: [], opciones: [], valor: '' },
+    { id: 'IMPORT_DUTY', nombre: 'Impuesto interno', tipo: 'list', requerido: true, unidades: [], valor: '',
+      opciones: ['0 %', '5 %', '10 %'].map((nombre, i) => ({ id: String(i), nombre })) }
   ];
   const categoria = { id: 'MLA5232', nombre: 'Herramientas › Taladros › De Mano', maxTitulo: 60, pideGtin: true,
     tiposPublicacion: [{ id: 'gold_special', nombre: 'Clásica' }, { id: 'gold_pro', nombre: 'Premium' }, { id: 'free', nombre: 'Gratuita' }] };
@@ -711,8 +827,8 @@ async function apiDemo(ruta, cuerpo, metodo) {
   atributos.push({ id: 'VALUE_ADDED_TAX', nombre: 'IVA', tipo: 'list', requerido: true, unidades: [], valor: 'Exento',
     opciones: ['Exento', '0 %', '10.5 %', '21 %', '27 %'].map((nombre, i) => ({ id: String(i), nombre })) });
   if (ruta === '/api/analizar') return {
-    identificacion: { producto: 'Taladro percutor eléctrico', estado_detalle: 'Uso visible en el mandril, carcasa sana.',
-      advertencias: ['No se ve el modelo: buscalo en la etiqueta de abajo.'], confianza: 'media' },
+    identificacion: { producto: 'Taladro percutor eléctrico', estado_detalle: 'Uso visible en el mandril, carcasa sana. Se ve el cable entero y el selector de velocidad funciona según la foto.',
+      advertencias: ['No se ve el modelo: buscalo en la etiqueta de abajo.', 'Sacá una foto del enchufe y del cable completo.', 'Aclarar si incluye mechas o maletín.'], confianza: 'media' },
     categorias: [{ id: 'MLA5232', nombre: 'Taladros eléctricos › De Mano' }, { id: 'MLA1', nombre: 'Herramientas › Otros' }],
     categoria, atributos,
     precio: { valor: 45000, fuente: 'ia', min: 38000, max: 52000, motivo: 'modo demo' },

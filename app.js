@@ -16,6 +16,8 @@
 
 const $ = id => document.getElementById(id);
 const DEMO = new URLSearchParams(location.search).has('demo');
+// En el demo, ?falla=analizar (o guardar, categoria…) simula que esa llamada falla, para probar los avisos.
+const FALLAS = new Set(new URLSearchParams(location.search).getAll('falla'));
 const MAX_FOTOS = 6;
 const LADO_FOTO = 1200;   // lo que recomienda MercadoLibre; también alcanza para Claude
 const LADO_MINIMO = 500;  // debajo de esto MercadoLibre la deja chica y baja la calidad
@@ -49,11 +51,20 @@ function esperar(texto) {
   $('espera').hidden = !texto;
 }
 
-function avisos(el, tipo, titulo, lista = []) {
+/** Aviso en la pantalla (en vez de un alert). `accion` agrega un botón, como "Reintentar". */
+function avisos(el, tipo, titulo, lista = [], accion) {
   el.className = `avisos ${tipo}`;
   el.replaceChildren();
   const p = document.createElement('p');
   p.textContent = titulo;
+  if (accion) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'enlace';
+    b.textContent = accion.texto;
+    b.onclick = accion.alHacer;
+    p.append(' ', b);
+  }
   el.append(p);
   if (lista.length) {
     const ul = document.createElement('ul');
@@ -76,7 +87,7 @@ const fecha = iso => {
 
 const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
 
-async function api(ruta, cuerpo, metodo) {
+async function api(ruta, cuerpo, metodo, { keepalive = false } = {}) {
   if (DEMO) return apiDemo(ruta, cuerpo, metodo);
   // El estado se pide igual sin clave: así se entera de si al Worker le faltan secretos.
   if (!clave() && ruta !== '/api/estado') {
@@ -86,7 +97,8 @@ async function api(ruta, cuerpo, metodo) {
   const res = await fetch(window.VENDELOYA.worker + ruta, {
     method: metodo || (cuerpo ? 'POST' : 'GET'),
     headers: { 'x-clave': clave(), ...(cuerpo ? { 'content-type': 'application/json' } : {}) },
-    body: cuerpo ? JSON.stringify(cuerpo) : undefined
+    body: cuerpo ? JSON.stringify(cuerpo) : undefined,
+    keepalive // para el guardado al cerrar la pestaña: el pedido sigue aunque la página se vaya
   });
   const datos = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -174,7 +186,7 @@ $('desconectar-ml').addEventListener('click', async () => {
   try {
     await api('/api/desconectar', {});
     toast('Cuenta de MercadoLibre desconectada.');
-  } catch (e) { alert(e.message); }
+  } catch (e) { toast(`No se pudo desconectar: ${e.message}`); }
   refrescarCuenta();
 });
 
@@ -186,8 +198,9 @@ $('cerrar-sesion').addEventListener('click', () => {
   refrescarCuenta();
 });
 // Al volver de la pestaña de MercadoLibre (o de otra app), se mira si quedó conectada.
+// Al irse (otra pestaña, otra app, cerrar), lo que estaba por guardarse se guarda ya.
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) return;
+  if (document.hidden) { guardarAlSalir(); return; }
   refrescarCuenta();
   if (!$('historial').hidden) cargarHistorial();
 });
@@ -219,19 +232,68 @@ function escalar(fuente, lado, calidad) {
 }
 
 async function agregarFotos(archivos) {
-  let chicas = 0;
+  let chicas = 0, malas = 0, sobran = 0;
+  $('aviso-inicio').hidden = true;
   for (const a of archivos) {
-    if (estado.fotos.length >= MAX_FOTOS) break;
+    if (estado.fotos.length >= MAX_FOTOS) { sobran++; continue; }
     const url = URL.createObjectURL(a);
     try {
       const { dataUrl, chica } = await escalar(url, LADO_FOTO, 0.85);
       estado.fotos.push({ dataUrl });
       if (chica) chicas++;
-    } catch (e) { alert(e.message); }
+    } catch { malas++; }
     URL.revokeObjectURL(url);
   }
-  if (chicas) alert('Alguna foto es chica (menos de 500 px). MercadoLibre la va a mostrar con baja calidad.');
+  const notas = [];
+  if (malas) notas.push(malas === 1 ? 'Una foto no se pudo leer.' : `${malas} fotos no se pudieron leer.`);
+  if (sobran) notas.push(`Entran hasta ${MAX_FOTOS} fotos: ${sobran === 1 ? 'una quedó' : `${sobran} quedaron`} afuera.`);
+  if (chicas) notas.push('Alguna foto es chica (menos de 500 px): MercadoLibre la va a mostrar con baja calidad.');
+  if (notas.length) avisos($('aviso-inicio'), malas ? 'error' : '', notas.join(' '));
   dibujarFotos();
+}
+
+/** Gira la foto 90° a la derecha (las del celu a veces llegan acostadas). */
+function girar(dataUrl) {
+  return new Promise((ok, mal) => {
+    const img = new Image();
+    img.onload = () => {
+      const cv = document.createElement('canvas');
+      cv.width = img.height;
+      cv.height = img.width;
+      const c = cv.getContext('2d');
+      c.translate(cv.width, 0);
+      c.rotate(Math.PI / 2);
+      c.drawImage(img, 0, 0);
+      ok(cv.toDataURL('image/jpeg', 0.9));
+    };
+    img.onerror = () => mal(new Error('No se pudo rotar la foto.'));
+    img.src = dataUrl;
+  });
+}
+
+async function rotarFoto(i) {
+  const f = estado.fotos[i];
+  try {
+    f.dataUrl = await girar(f.dataUrl);
+    delete f.id; // ya no es la que subió MercadoLibre
+  } catch (e) { toast(e.message); }
+  dibujarFotos();
+}
+
+/** La primera foto es la portada de la publicación. */
+function hacerPortada(i) {
+  estado.fotos.unshift(...estado.fotos.splice(i, 1));
+}
+
+function botonFoto(texto, etiqueta, clase, alHacer) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = clase;
+  b.textContent = texto;
+  b.title = etiqueta;
+  b.setAttribute('aria-label', etiqueta);
+  b.onclick = alHacer;
+  return b;
 }
 
 function dibujarFotos() {
@@ -241,12 +303,17 @@ function dibujarFotos() {
     const img = document.createElement('img');
     img.src = f.dataUrl;
     img.alt = `Foto ${i + 1}`;
-    const x = document.createElement('button');
-    x.type = 'button';
-    x.textContent = '×';
-    x.setAttribute('aria-label', `Sacar foto ${i + 1}`);
-    x.onclick = () => { estado.fotos.splice(i, 1); dibujarFotos(); };
-    d.append(img, x);
+    d.append(img,
+      botonFoto('×', `Sacar foto ${i + 1}`, 'sacar', () => { estado.fotos.splice(i, 1); dibujarFotos(); }),
+      botonFoto('⟳', `Rotar foto ${i + 1}`, 'rotar', () => rotarFoto(i)));
+    if (i === 0) {
+      const s = document.createElement('span');
+      s.className = 'es-portada';
+      s.textContent = 'Portada';
+      d.append(s);
+    } else {
+      d.append(botonFoto('★', `Usar la foto ${i + 1} de portada`, 'portada', () => { hacerPortada(i); dibujarFotos(); }));
+    }
     return d;
   }));
   $('analizar').disabled = !estado.fotos.length;
@@ -276,26 +343,42 @@ $('paso-fotos').addEventListener('drop', e => {
   if (imagenes.length) agregarFotos(imagenes);
 });
 
+/* En la compu: pegar con Ctrl+V una foto copiada (una captura, una imagen de otra página). */
+document.addEventListener('paste', e => {
+  if ($('paso-fotos').hidden) return;
+  const imagenes = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
+  if (!imagenes.length) return;
+  e.preventDefault();
+  agregarFotos(imagenes);
+});
+
 /* ---------- análisis ---------- */
 
-$('analizar').addEventListener('click', async () => {
+/** Si falla, las fotos quedan como estaban y el aviso ofrece reintentar. */
+async function analizar() {
+  $('aviso-inicio').hidden = true;
   esperar('Mirando las fotos y armando la publicación…');
+  let r;
   try {
-    const r = await api('/api/analizar', { fotos: estado.fotos.map(f => f.dataUrl) });
-    estado.analisis = r;
-    estado.registroId = nuevoId();
-    estado.estadoReg = 'borrador';
-    mostrarRevision(r);
-    local('vendeloya.actual', estado.registroId);
-    // Primer guardado: con las fotos y la miniatura. Los siguientes van sin fotos.
-    const { dataUrl: thumb } = await escalar(estado.fotos[0].dataUrl, LADO_THUMB, 0.7);
-    await guardar({ fotos: estado.fotos, thumb, analisis: r });
+    r = await api('/api/analizar', { fotos: estado.fotos.map(f => f.dataUrl) });
   } catch (e) {
-    alert(e.message);
+    avisos($('aviso-inicio'), 'error', `No se pudo armar la publicación: ${e.message}`, [], { texto: 'Reintentar', alHacer: analizar });
+    return;
   } finally {
     esperar('');
   }
-});
+  estado.analisis = r;
+  estado.registroId = nuevoId();
+  estado.estadoReg = 'borrador';
+  mostrarRevision(r);
+  local('vendeloya.actual', estado.registroId);
+  // Primer guardado: con las fotos y la miniatura. Los siguientes van sin fotos.
+  await guardar({ fotos: estado.fotos, ...(await miniatura()), analisis: r });
+}
+$('analizar').addEventListener('click', analizar);
+
+/** La miniatura del historial sale de la portada. */
+const miniatura = () => escalar(estado.fotos[0].dataUrl, LADO_THUMB, 0.7).then(m => ({ thumb: m.dataUrl })).catch(() => ({}));
 
 function opcion(valor, texto, elegida) {
   const o = document.createElement('option');
@@ -328,11 +411,19 @@ function mostrarRevision(r, guardada) {
   dibujarPrecio(r.precio);
   dibujarIA(r.identificacion);
 
-  // Foto grande arriba; las miniaturas la cambian (solo si hay más de una).
-  const elegirFoto = i => {
-    $('foto-grande').src = estado.fotos[i]?.dataUrl || '';
-    for (const [j, b] of [...$('fotos-revision').children].entries()) b.classList.toggle('activa', j === i);
-  };
+  dibujarFotosRevision();
+
+  $('resultado-revision').hidden = true;
+  marcarGuardado('');
+  for (const g of document.querySelectorAll('.grupo')) g.open = false;
+  resumirVenta();
+  actualizarChecklist();
+  marcarPropuesta();
+  pantalla('revision');
+}
+
+/* Foto grande arriba; las miniaturas la cambian (solo si hay más de una). */
+function dibujarFotosRevision() {
   $('fotos-revision').replaceChildren(...(estado.fotos.length > 1 ? estado.fotos : []).map((f, i) => {
     const b = document.createElement('button');
     b.type = 'button';
@@ -346,13 +437,37 @@ function mostrarRevision(r, guardada) {
     return b;
   }));
   elegirFoto(0);
+}
 
-  $('resultado-revision').hidden = true;
-  $('guardado').textContent = '';
-  for (const g of document.querySelectorAll('.grupo')) g.open = false;
-  resumirVenta();
-  actualizarChecklist();
-  pantalla('revision');
+function elegirFoto(i) {
+  estado.fotoVista = i;
+  $('foto-grande').src = estado.fotos[i]?.dataUrl || '';
+  for (const [j, b] of [...$('fotos-revision').children].entries()) b.classList.toggle('activa', j === i);
+  $('usar-portada').hidden = !(i > 0);
+}
+
+/* La que se está mirando pasa a ser la portada (primera foto de la publicación). */
+$('usar-portada').addEventListener('click', async () => {
+  hacerPortada(estado.fotoVista);
+  dibujarFotosRevision();
+  tocado();
+  toast('Listo, esa es la portada ahora.');
+  await guardar({ fotos: estado.fotos, ...(await miniatura()) });
+});
+
+/* Si se editó el título o la descripción, se puede volver a lo que propuso la IA. */
+function marcarPropuesta() {
+  const p = estado.analisis?.propuesta || {};
+  for (const b of document.querySelectorAll('.volver-ia')) b.hidden = $(b.dataset.campo).value === (p[b.dataset.campo] || '');
+}
+for (const b of document.querySelectorAll('.volver-ia')) {
+  b.addEventListener('click', e => {
+    e.preventDefault();
+    const el = $(b.dataset.campo);
+    el.value = estado.analisis?.propuesta?.[b.dataset.campo] || '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.focus();
+  });
 }
 
 /** Lo que se ve con el grupo "Envío y venta" cerrado. */
@@ -499,7 +614,7 @@ $('categoria').addEventListener('change', async () => {
     dibujarCategoria(r.categoria, r.atributos, $('tipo').value);
     programarGuardado();
   } catch (e) {
-    alert(e.message);
+    toast(`No se pudo cambiar la categoría: ${e.message}`);
     $('categoria').value = estado.categoria.id;
   } finally {
     esperar('');
@@ -533,7 +648,33 @@ function pendientes() {
     { ok: precioActual() > 0, texto: precioActual() > 0 ? `Precio $ ${miles(precioActual())}` : 'Precio', el: $('precio') },
     { ok: !faltan.length, texto: faltan.length ? `Falta${faltan.length > 1 ? 'n' : ''} ${faltan.length} dato${faltan.length > 1 ? 's' : ''} obligatorio${faltan.length > 1 ? 's' : ''}` : 'Datos obligatorios', el: faltan[0] }
   ];
+  // MercadoLibre rechaza los datos de contacto: se avisa antes y frena el Publicar.
+  for (const [id, donde] of [['titulo', 'del título'], ['descripcion', 'de la descripción']]) {
+    const que = contacto($(id).value);
+    if (que) items.push({ ok: false, texto: `Sacá ${que} ${donde}`, el: $(id) });
+  }
+  // Las palabras de promoción en el título no frenan, pero MercadoLibre las desaconseja.
+  const promo = PROMO.exec(titulo);
+  if (promo) items.push({ ok: true, aviso: true, texto: `"${promo[0]}" en el título no suma`, el: $('titulo') });
   return { items, pendientes: items.filter(i => !i.ok) };
+}
+
+const PROMO = /env[ií]o gratis|oferta|imperdible|liquido|liquidaci[oó]n|mejor precio|promo/i;
+const CONTACTO = [
+  [/[\w.+-]+@[\w-]+\.[a-z]{2,}/i, 'el mail'],
+  [/\bhttps?:\/\/|\bwww\.|\b[\w-]+\.(com|net|org|ar)\b/i, 'el link'],
+  [/whats?app|\bwsp\b|\bwpp\b/i, 'el WhatsApp']
+];
+
+/** Qué dato de contacto hay en el texto ('' si ninguno). */
+function contacto(texto) {
+  for (const [re, que] of CONTACTO) if (re.test(texto)) return que;
+  // Un teléfono: de 8 a 13 dígitos. Si son 12 o 13 seguidos sin separar, es un código de barras.
+  const tel = (texto.match(/\+?\d[\d\s()-]{6,}\d/g) || []).some(m => {
+    const n = m.replace(/\D/g, '').length;
+    return n >= 8 && n <= 13 && (n < 12 || /[\s()+-]/.test(m));
+  });
+  return tel ? 'el teléfono' : '';
 }
 
 function actualizarChecklist() {
@@ -541,7 +682,7 @@ function actualizarChecklist() {
   const { items, pendientes: faltan } = pendientes();
   $('checklist').replaceChildren(...items.map(i => {
     const li = document.createElement('li');
-    li.className = i.ok ? 'ok' : 'pendiente';
+    li.className = !i.ok ? 'pendiente' : i.aviso ? 'aviso' : 'ok';
     li.textContent = i.texto;
     return li;
   }));
@@ -553,6 +694,7 @@ function actualizarChecklist() {
 /* Cualquier cambio se autoguarda (y obliga a que MercadoLibre lo revise de nuevo al publicar). */
 function tocado(e) {
   actualizarChecklist();
+  marcarPropuesta();
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
   if (['envio', 'cantidad', 'tipo'].includes(e?.target?.id)) resumirVenta();
@@ -565,27 +707,51 @@ $('paso-revision').addEventListener('change', tocado);
 /* ---------- guardado ---------- */
 
 let guardadoTimer;
+let sinGuardar = false;    // hay cambios que todavía no llegaron al Worker
+let extraPendiente = {};   // fotos, miniatura… de un guardado que falló: van en el próximo
+
+function marcarGuardado(texto) {
+  const el = $('guardado');
+  el.replaceChildren(texto);
+  if (texto === 'No se pudo guardar') el.append(' · ', botonFoto('Reintentar', 'Reintentar el guardado', 'enlace', () => guardar()));
+}
 
 function programarGuardado() {
   if (!estado.registroId) return;
   clearTimeout(guardadoTimer);
-  $('guardado').textContent = 'Sin guardar…';
+  sinGuardar = true;
+  marcarGuardado('Sin guardar…');
   guardadoTimer = setTimeout(() => guardar(), ESPERA_GUARDADO);
 }
 
 /** Guarda lo editado (y lo que venga en `extra`) en el registro actual. */
-async function guardar(extra = {}) {
+async function guardar(extra = {}, { alSalir = false } = {}) {
   if (!estado.registroId) return;
   clearTimeout(guardadoTimer);
-  $('guardado').textContent = 'Guardando…';
+  extraPendiente = { ...extraPendiente, ...extra };
+  sinGuardar = true;
+  marcarGuardado('Guardando…');
+  // keepalive tiene un tope de 64 KB: con fotos no se usa.
+  const keepalive = alSalir && !extraPendiente.fotos;
   try {
-    await api(`/api/registros/${estado.registroId}`, { publicacion: leerPublicacion(), estado: estado.estadoReg, ...extra }, 'PUT');
-    $('guardado').textContent = 'Guardado ✓';
+    await api(`/api/registros/${estado.registroId}`, { publicacion: leerPublicacion(), estado: estado.estadoReg, ...extraPendiente }, 'PUT', { keepalive });
+    extraPendiente = {};
+    sinGuardar = false;
+    marcarGuardado('Guardado ✓');
   } catch (e) {
-    $('guardado').textContent = 'No se pudo guardar';
+    marcarGuardado('No se pudo guardar');
     console.warn('guardar:', e.message);
   }
 }
+
+function guardarAlSalir() {
+  if (sinGuardar) guardar({}, { alSalir: true });
+}
+addEventListener('pagehide', guardarAlSalir);
+// Si el último guardado falló, el navegador pregunta antes de cerrar.
+addEventListener('beforeunload', e => {
+  if (sinGuardar && $('guardado').textContent.startsWith('No se pudo')) e.preventDefault();
+});
 
 /* ---------- historial ---------- */
 
@@ -603,10 +769,33 @@ async function cargarHistorial() {
   }
 }
 
+/* Filtro por estado y búsqueda por título: aparecen recién cuando la lista se alarga. */
+const MIN_FILTROS = 5;
+const historialVista = { registros: [], filtro: '', busqueda: '' };
+const sinAcentos = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const enFiltro = (r, f) => !f || (f === 'publicada' ? r.estado === 'publicada' : r.estado !== 'publicada');
+
+for (const b of document.querySelectorAll('.filtro')) {
+  b.addEventListener('click', () => { historialVista.filtro = b.dataset.filtro; dibujarHistorial(historialVista.registros); });
+}
+$('historial-buscar').addEventListener('input', e => { historialVista.busqueda = e.target.value; dibujarHistorial(historialVista.registros); });
+
 function dibujarHistorial(registros) {
-  const visibles = registros.filter(r => !ocultos.has(r.id));
+  historialVista.registros = registros;
+  const todos = registros.filter(r => !ocultos.has(r.id));
+  const conFiltros = todos.length >= MIN_FILTROS;
+  $('historial-filtros').hidden = !conFiltros;
+  const { filtro, busqueda } = conFiltros ? historialVista : { filtro: '', busqueda: '' };
+  for (const b of document.querySelectorAll('.filtro')) {
+    b.classList.toggle('activo', b.dataset.filtro === filtro);
+    b.querySelector('small').textContent = todos.filter(r => enFiltro(r, b.dataset.filtro)).length;
+  }
+  const buscado = sinAcentos(busqueda.trim());
+  const visibles = todos.filter(r => enFiltro(r, filtro) && sinAcentos(r.titulo).includes(buscado));
   $('historial-vacio').hidden = visibles.length > 0;
-  $('historial-vacio').textContent = 'Todavía no analizaste nada. Lo que armes queda guardado acá, aunque cierres la app.';
+  $('historial-vacio').textContent = todos.length
+    ? 'No hay nada con ese filtro.'
+    : 'Todavía no analizaste nada. Lo que armes queda guardado acá, aunque cierres la app.';
   $('historial-lista').replaceChildren(...visibles.map(r => {
     const li = document.createElement('li');
     li.className = 'item';
@@ -636,7 +825,7 @@ function dibujarHistorial(registros) {
     borrar.textContent = '×';
     borrar.title = r.estado === 'publicada' ? 'Sacar del historial (no la despublica)' : 'Borrar borrador';
     borrar.setAttribute('aria-label', `${borrar.title}: ${r.titulo}`);
-    borrar.onclick = () => borrarRegistro(r, registros);
+    borrar.onclick = () => borrarRegistro(r, historialVista.registros);
 
     li.append(abrir, borrar);
     return li;
@@ -669,11 +858,11 @@ async function abrirRegistro(id, { silencioso = false } = {}) {
     estado.estadoReg = reg.estado === 'publicada' ? 'publicada' : 'borrador';
     if (reg.estado === 'publicada') { mostrarListo(reg.ml || {}, null); return; }
     mostrarRevision(reg.analisis, reg.publicacion);
-    $('guardado').textContent = 'Guardado ✓';
+    marcarGuardado('Guardado ✓');
     local('vendeloya.actual', reg.id);
   } catch (e) {
     local('vendeloya.actual', null);
-    if (!silencioso) alert(e.message);
+    if (!silencioso) toast(`No se pudo abrir: ${e.message}`);
   } finally {
     esperar('');
   }
@@ -683,7 +872,10 @@ $('refrescar-historial').addEventListener('click', cargarHistorial);
 
 function volverAlInicio() {
   clearTimeout(guardadoTimer);
-  if (estado.registroId && $('guardado').textContent === 'Sin guardar…') guardar();
+  if (estado.registroId && sinGuardar) guardar();
+  sinGuardar = false;
+  extraPendiente = {};
+  $('aviso-inicio').hidden = true;
   estado.fotos = [];
   estado.analisis = null;
   estado.atributos = [];
@@ -776,9 +968,32 @@ function mostrarListo(ml, aviso) {
   $('listo-texto').textContent = `Quedó publicada${ml.id ? ` (${ml.id})` : ''}.${aviso ? ' ' + aviso : ''}`;
   $('listo-link').href = ml.permalink || '#';
   $('listo-link').hidden = !ml.permalink;
+  $('listo-compartir').hidden = !ml.permalink;
+  $('compartir').hidden = !navigator.share;
+  estado.publicada = { titulo: $('titulo').value.trim(), link: ml.permalink };
   local('vendeloya.actual', null);
   pantalla('listo');
 }
+
+/* Para pasar el link por WhatsApp o redes: en el celu, el menú de compartir; en la compu, copiarlo. */
+$('compartir').addEventListener('click', () => {
+  const { titulo, link } = estado.publicada || {};
+  navigator.share({ title: titulo, text: titulo, url: link }).catch(() => {});
+});
+$('copiar-link').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(estado.publicada?.link || '');
+    toast('Link copiado.');
+  } catch { toast('No se pudo copiar el link.'); }
+});
+
+/* Ctrl+Enter (Cmd+Enter en Mac) publica desde cualquier campo de la revisión: es el mismo botón. */
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
+  if ($('paso-revision').hidden || document.querySelector('dialog[open]') || !$('espera').hidden) return;
+  e.preventDefault();
+  $('publicar').click();
+});
 
 $('confirmar-si').addEventListener('click', async () => {
   $('confirmar').close();
@@ -808,6 +1023,8 @@ function demoRegs(nuevo) {
 
 async function apiDemo(ruta, cuerpo, metodo) {
   await new Promise(r => setTimeout(r, 400));
+  const nombre = metodo === 'PUT' ? 'guardar' : ruta.split('/')[2];
+  if (FALLAS.has(nombre)) throw new Error('Falla simulada del demo');
   const atributos = [
     { id: 'BRAND', nombre: 'Marca', tipo: 'string', requerido: true, unidades: [], opciones: [], valor: 'Black+Decker' },
     { id: 'MODEL', nombre: 'Modelo', tipo: 'string', requerido: true, unidades: [], opciones: [], valor: '' },
@@ -872,7 +1089,11 @@ async function apiDemo(ruta, cuerpo, metodo) {
 
 /* ---------- arranque ---------- */
 
-if (DEMO) document.title = 'VendeloYa (demo)';
+if (DEMO) {
+  document.title = 'VendeloYa (demo)';
+  // Ganchos para probar sin manos (solo en el demo).
+  window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista };
+}
 dibujarFotos();
 refrescarCuenta();
 cargarHistorial();

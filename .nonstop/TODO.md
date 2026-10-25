@@ -1,16 +1,14 @@
-# TODO — 10 mejoras estéticas
+# TODO — ronda 2: 10 mejoras de uso
 
-- [x] 0. Demo que reproduzca la captura: GTIN obligatorio vacío, 6 obligatorios completos, 12 opcionales, descripción larga sin saltos · verif: en demo aparece el GTIN en "Falta completar" (antes del arreglo)
-- [x] 1. Alinear "Categoría" y "Condición" (la regla :first-child pegaba en la grilla) · verif: misma coordenada Y de los dos labels
-- [x] 2. Precio con separador de miles y sin flechitas · verif: input muestra "45.000", leerPublicacion().precio === 45000, botones de rango lo cargan formateado
-- [x] 3. Normalizar borradores viejos: GTIN no obligatorio ("Código de barras, solo si tiene") y defaults (Modelo NA, IVA Exento, impuesto 0 %) · verif: en demo el GTIN pasa a Opcionales y "Falta completar" desaparece si no queda nada
-- [x] 4. Foto principal grande en la columna izquierda, miniaturas debajo que la cambian · verif: click en miniatura cambia el src de la principal
-- [x] 5. Panel de la IA más prolijo: estado como cita, consejos con ícono, jerarquía de tamaños · verif: captura en 1440×800
-- [x] 6. Resumen "listo para publicar" arriba del botón (fotos, título, precio, categoría, datos obligatorios) que se actualiza al editar · verif: con un dato faltante muestra 1 pendiente; al completarlo, todo en verde
-- [x] 7. Botón Publicar con ícono y texto según estado ("Publicar" / "Completá 1 dato") · verif: texto cambia al completar el dato
-- [x] 8. Header más compacto y consistente (alto ~56 px) · verif: altura medida ≤ 58 px en compu y celu
-- [x] 9. Inicio: zona de fotos grande con ícono y arrastrar y soltar en la compu · verif: evento drop con un File agrega la foto
-- [x] 10. Historial: tarjetas en grilla en la compu, hover y miniatura más grande · verif: 2+ columnas en 1440 px y una en celu
-- [x] 11. Detalles finos: contador del título en ámbar cerca del límite, foco visible, transiciones · verif: contador cambia de color en 55/60
-- [x] 12. Verificación final contra los criterios de la SPEC (compu, notebook, celu, consola, tests) · verif: checklist de criterios en INFORME
-- [x] 13. Celu: foto principal más baja y barra de Publicar fija abajo en toda la revisión (el sticky solo andaba dentro de la última tarjeta) · verif: botón visible arriba de todo y al final, sin scroll horizontal
+- [x] 0. Ganchos de verificación: `window.__vy` en demo (estado, pendientes, agregarFotos) y error simulado del análisis con `?demo=1&falla=analizar` · verif: `__vy.estado` accesible y el análisis demo falla con ese parámetro
+- [x] 1. Errores en pantalla, sin alert(): aviso del inicio con "Reintentar" para el análisis; fotos chicas, categoría y abrir registro también avisan en la pantalla · verif: con falla=analizar aparece el aviso, las fotos siguen y Reintentar vuelve a llamar; grep sin alert(
+- [x] 2. Portada y rotación en el inicio: ★ para hacerla portada (pasa al primer lugar) y ⟳ para rotarla 90° · verif: después de ★ la foto 3 queda primera; después de ⟳ ancho y alto se intercambian
+- [x] 3. Pegar fotos con Ctrl+V en el inicio · verif: un evento paste con un File de imagen agrega la foto
+- [x] 4. Guardado seguro: guardar en el acto al ocultar la pestaña o en pagehide; "No se pudo guardar · Reintentar" · verif: cambio + visibilitychange (hidden) guarda sin esperar el timer; con la falla simulada el botón Reintentar guarda
+- [x] 5. Datos de contacto: un teléfono, mail o link en el título o la descripción va al checklist y frena el Publicar; "envío gratis" u "oferta" en el título es un aviso que no frena · verif: la descripción con "11 5555-1234" marca pendiente y Publicar lleva al campo
+- [x] 6. Ctrl+Enter (o Cmd+Enter) en la revisión = Publicar · verif: el keydown dispara la misma lógica (con pendientes, el foco va al campo)
+- [x] 7. Historial: chips Todos / Borradores / Publicadas y buscador con 5 registros o más · verif: demo con 6 registros, el filtro y la búsqueda reducen la lista
+- [x] 8. "↺ Propuesta de la IA" para el título y la descripción, visible solo si cambiaron · verif: editar el título muestra el link; tocarlo restaura y lo oculta
+- [x] 9. Publicada: botones Compartir (Web Share) y Copiar link · verif: con navigator.share simulado se llama con la URL; sin share, copia al portapapeles (stub)
+- [x] 10. Revisión: botón "Usar de portada" sobre la foto grande cuando no es la primera · verif: elegir la miniatura 2 y usarla de portada la deja primera en estado.fotos y se guarda
+- [x] 11. Versión de caché + verificación final contra la SPEC (compu, celu, consola, tests del Worker) · verif: checklist de criterios en INFORME

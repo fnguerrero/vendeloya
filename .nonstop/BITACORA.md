@@ -1,17 +1,15 @@
-# Bitácora — 10 mejoras estéticas
+# Bitácora — ronda 2: 10 mejoras de uso
 
-#0 — Bootstrap: SPEC, TODO (12 ítems: 10 mejoras + demo + verificación), settings del proyecto; .nonstop y .claude excluidos del deploy — n/a
-#1 — Demo con GTIN y impuesto obligatorios vacíos, 3 fotos y más consejos de la IA — en demo 'Falta completar' muestra MODEL, GTIN, IMPORT_DUTY (como la captura)
-#2 — Categoría y Condición alineadas: la regla :first-child pegaba en el primer label de la grilla, ahora es > .campo:first-child — labels en Y=175 los dos (la primera medición falló por CSS en caché: versión subida a v=5)
-#3 — Precio en texto con puntos de miles y cursor estable; leerPublicacion lo devuelve como número — demo: 45.000 inicial, Máximo carga 52.000, tipeado 1234567 se ve 1.234.567 y se lee 1234567
-#4 — normalizarAtributos en la app (GTIN opcional, Modelo NA, IVA Exento, impuesto 0 %) para borradores viejos — demo: Falta completar queda vacío y oculto, GTIN en Opcionales como Código de barras (solo si tiene)
-#5 — Foto principal grande (4:3, contain) con miniaturas en botones que la cambian — demo: click en la 3.ª cambia el src y marca activa=2; sin scroll de página
-#6 — Panel de la IA: etiqueta 'Lo que vio la IA', estado como cita con borde azul, consejos con ícono ámbar y separadores — captura 1440×800 ok; la columna scrollea por dentro con 6 fotos
-#7 — Resumen 'listo para publicar' en chips (fotos, título, categoría, precio, obligatorios) que se actualiza al editar — demo: con Modelo vacío marca 'Falta 1 dato obligatorio'; completo, todo en verde
-#8 — Botón Publicar con ícono y estado: 'Completá lo que falta' (claro) lleva al campo, abre su grupo y lo resalta sin llamar a la API — demo: foco en MODEL, grupo abierto, sin espera; completo vuelve a 'Publicar'
-#9 — Header compacto: 52 px de alto (logo 30 px, chip y engranaje más chicos) — medido en 1440×800
-#10 — Inicio: zona grande punteada con ícono de cámara, 'Agregar más fotos · N de 6', arrastrar y soltar; botón de cámara solo en pantallas táctiles — demo: drop de un File agrega la foto y habilita Armar
-#11 — Historial en tarjetas de 2 columnas en la compu, hover, miniatura 60 px, título en 2 líneas y estado abajo; main a 760 px — demo: 2 columnas de 343 px, título sin cortar
-#12 — Detalles: contador del título en ámbar desde 55/60, foco visible, transiciones — demo: 56/60 con clase cerca
-#13 — Celu: Publicar fijo abajo (el sticky solo valía dentro de su tarjeta), foto más baja, chips en una fila; grupo sin corte; foto más baja con poca altura — celu: botón visible arriba y abajo, nada tapado, sin scroll horizontal
-#14 — Verificación final: 1440×800 sin scroll y sin desbordes, alineados, precio, GTIN, checklist, foto, celu y 18 tests ok; en 1366×680 los consejos scrollean 74 px por dentro (anotado como desvío) — INFORME escrito
+#0 — Bootstrap: ronda 1 archivada en ronda-1-esteticas/, SPEC y TODO de 10 mejoras de uso (solo front) — n/a
+#1 — Ganchos: window.__vy en demo y ?falla=<ruta> (o FALLAS.add) para simular errores — __vy.estado accesible; analizar falla con FALLAS
+#2 — Errores en pantalla: aviso del inicio con Reintentar para el análisis; fotos que no se leen, de más o chicas, categoría, abrir y desconectar avisan sin alert — falla simulada: aviso visible, 3 fotos intactas, Reintentar llega a la revisión
+#3 — Portada (★, etiqueta "Portada" en la primera) y rotar 90° (le borra el id de ML) — la foto 3 pasa a primera; 800×600 → 600×800 sin id
+#4 — Pegar fotos con Ctrl+V en el inicio — ClipboardEvent con un File: de 3 a 4 fotos
+#5 — Guardado seguro: al ocultar la pestaña o en pagehide guarda ya (keepalive si no lleva fotos); lo extra de un guardado fallido viaja en el siguiente; "No se pudo guardar · Reintentar"; beforeunload solo si falló — visibilitychange guarda a los 500 ms (antes del timer de 1200); con falla, Reintentar guarda
+#6 — Datos de contacto (teléfono, mail, link, WhatsApp) en título o descripción: pendiente que frena y lleva al campo; palabras de promoción en el título: aviso "!" que no frena — 11 casos del detector bien (EAN de 13 dígitos, medidas y precios no cuentan); Publicar enfoca la descripción
+#7 — Ctrl/Cmd+Enter = Publicar (no corre con un diálogo abierto ni esperando) — con pendiente enfoca y resalta el campo; completo abre el confirmar. La primera prueba falló por la prueba: el Modelo ya venía "NA" por defecto, no había pendiente
+#8 — Historial: chips Todas/Borradores/Publicadas con cantidades y buscador sin acentos, desde 5 registros — 7 registros: 4 borradores, 3 publicadas; "lampara" encuentra "Lámpara de pie"; sin resultados muestra "No hay nada con ese filtro."
+#9 — "↺ Propuesta de la IA" en título y descripción, solo si cambiaron — se ve al editar; restaura, se oculta, contador 38/60 y autoguarda
+#10 — Publicada: Compartir (Web Share, oculto si no hay) y Copiar link con toast — stubs: share con título y URL, portapapeles con el link
+#11 — Revisión: "★ Usar de portada" sobre la foto grande cuando no es la primera — la foto 2 pasa a primera, se guarda con miniatura nueva, botón oculto
+#12 — Versión de caché (css 14, app 12, sw vendeloya-9) y verificación final: 1440×800 sin scroll ni desbordes, celu sin scroll horizontal, consola limpia, 18 tests — INFORME escrito

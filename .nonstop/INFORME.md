@@ -1,44 +1,50 @@
-# Informe — 10 mejoras estéticas (23/10/2026)
+# Informe — ronda 2: 10 mejoras de uso (25/10/2026)
 
 ## Qué se hizo
-Pulido visual de VendeloYa, sobre todo en la pantalla de revisión:
+Diez mejoras de uso, solo en el front (`app.js`, `index.html`, `styles.css`):
 
-1. **Categoría y Condición alineadas.** La regla `:first-child` también agarraba al primer label de la grilla.
-2. **Precio con puntos de miles** ("380.000") y sin las flechitas del navegador. Por dentro sigue siendo un número.
-3. **Borradores viejos normalizados.** El código universal ya no aparece como obligatorio (pasa a "Código de barras, solo si tiene"), y se aplican Modelo NA, IVA Exento e impuesto interno 0 %.
-4. **Foto principal grande**, con miniaturas que la cambian.
-5. **Panel de la IA más prolijo.** Etiqueta "Lo que vio la IA", el estado como cita y los consejos con ícono.
-6. **Resumen "listo para publicar"** en chips: fotos, título, categoría, precio y datos obligatorios. Llena el hueco que quedaba en la columna derecha.
-7. **Botón Publicar con ícono y estado.** Si falta algo dice "Completá lo que falta" y te lleva al campo sin llamar a MercadoLibre.
-8. **Header más compacto**: 52 px de alto.
-9. **Inicio**: zona grande para elegir o arrastrar fotos. El botón de cámara aparece solo en pantallas táctiles.
-10. **Historial en tarjetas** de dos columnas en la compu, con hover y título en dos líneas.
-11. **Detalles**: el contador del título se pone ámbar cerca del límite, el foco es visible y hay transiciones.
-12. (extra) **Celu**: la barra de Publicar queda fija abajo en toda la revisión, y la foto es más baja.
+1. **Errores en pantalla, sin `alert()`.** Si falla el análisis, aparece un aviso con "Reintentar" y las fotos quedan. Las fotos que no se leen, las que sobran y las chicas también avisan en la pantalla.
+2. **Portada y rotación en el inicio.** Con ★ una foto pasa a ser la portada (primer lugar) y con ⟳ se gira 90°.
+3. **Pegar fotos con Ctrl+V** en la compu.
+4. **Guardado seguro.** Al cambiar de pestaña o cerrar, lo pendiente se guarda en el acto. Si falla, "No se pudo guardar · Reintentar", y lo que no llegó (fotos, miniatura) viaja en el próximo guardado.
+5. **Datos de contacto.** Un teléfono, mail, link o WhatsApp en el título o la descripción frena el Publicar y te lleva al campo. Las palabras de promoción en el título ("oferta", "envío gratis") son un aviso que no frena.
+6. **Ctrl+Enter publica** desde cualquier campo de la revisión.
+7. **Historial con filtros.** Chips Todas / Borradores / Publicadas con cantidades y un buscador sin acentos, desde 5 registros.
+8. **"↺ Propuesta de la IA"** para volver al título o la descripción originales.
+9. **Publicada: Compartir y Copiar link.**
+10. **"★ Usar de portada" en la revisión**, sobre la foto grande. Se guarda con la miniatura nueva.
 
-Cómo probar: `py -3 -m http.server 5610` en la carpeta del proyecto y abrir http://localhost:5610/?demo=1. El modo demo ahora reproduce el caso de la captura: el GTIN obligatorio y el impuesto vacío.
+Cómo probarlo: `py -3 -m http.server 5611` en la carpeta y abrir `http://localhost:5611/?demo=1`. Con `&falla=analizar` o `&falla=guardar` se simulan los errores.
 
-## Verificación (criterios de la SPEC)
-1. 1440×800 sin scroll de página, y ninguna de las tres columnas se desborda: **ok** (scrollHeight 800 = alto).
-2. Categoría y Condición a la misma altura: **ok** (las dos en Y=175).
-3. Precio "45.000" y `leerPublicacion().precio === 45000`. Tipeando 1234567 se ve 1.234.567: **ok**.
-4. Un borrador con GTIN obligatorio no lo muestra en "Falta completar": **ok** (pasa a Opcionales).
-5. El resumen refleja lo que falta: **ok** (Modelo vacío → "Falta 1 dato obligatorio"; completo → todo en verde).
-6. La foto grande cambia con las miniaturas: **ok**.
-7. Sin scroll horizontal en el celu: **ok**. En la consola solo aparecen dos 401 de la primera carga sin `?demo` y sin clave, que es lo esperado; el demo no genera errores.
-8. Tests del Worker: **18 en verde**.
+## Verificación
+| Criterio | Resultado |
+|---|---|
+| 1. Sin alert y Reintentar | `grep alert(` sin resultados; con la falla, aviso visible, 3 fotos intactas y Reintentar llega a la revisión |
+| 2. Portada y rotación | foto 3 → primera; 800×600 → 600×800 sin el id de ML |
+| 3. Ctrl+V | de 3 a 4 fotos con un ClipboardEvent |
+| 4. Guardado al salir y reintento | guardado a los 500 ms del visibilitychange (el timer es de 1200); con la falla, Reintentar guarda |
+| 5. Contacto | 11 casos bien: el EAN de 13 dígitos, las medidas y los precios no cuentan; Publicar enfoca el campo |
+| 6. Ctrl+Enter | con pendiente, foco y resaltado; completo, abre el confirmar; con un diálogo abierto no hace nada |
+| 7. Historial | 7 registros: 4 borradores y 3 publicadas; "lampara" encuentra "Lámpara de pie" |
+| 8. Propuesta de la IA | aparece al editar; restaura, se oculta y autoguarda |
+| 9. Compartir / copiar | stubs: share con título y URL, portapapeles con el link |
+| 10. Portada en la revisión | la foto 2 queda primera, guardada con miniatura nueva |
+| 11. Pantallas | 1440×800: revisión sin scroll de página ni desbordes. 375×812: sin scroll horizontal. Consola sin errores |
+| 12. Tests del Worker | 18 en verde |
 
-## Decisiones por criterio propio
-- La normalización de borradores viejos se duplicó en la app (`normalizarAtributos`) en vez de reanalizar, para no gastar llamadas a la IA.
-- Si falta algo, el botón Publicar lleva directo al campo en vez de preguntarle a MercadoLibre: es más rápido y no consume la API.
-- La cámara se ofrece solo en pantallas táctiles: en la compu abre el mismo selector de archivos que la zona grande.
+## Decisiones propias
+- "10 mejoras" sin más detalle: como la ronda 1 fue estética, esta fue de uso.
+- Solo front, para no tocar el Worker ni su despliegue.
+- El teléfono se detecta por cantidad de dígitos (de 8 a 13). Si son 12 o 13 seguidos sin separar, se toma como código de barras.
+- `keepalive` solo cuando el guardado no lleva fotos, por el tope de 64 KB.
+- Los atajos (Ctrl+V, Ctrl+Enter) no se muestran en pantallas táctiles.
 
 ## Desvíos de la SPEC
-- Se agregó el ítem 13 (celu), que no estaba previsto: en la verificación final apareció que el botón sticky solo se veía dentro de su tarjeta.
-- En una notebook de 1366×680, la lista de consejos de la IA scrollea por dentro de su columna (74 px). La página no scrollea. Se achicó la foto en pantallas bajas, pero no alcanzó para todo; se dejó así porque es lo menos importante de la pantalla.
+- El preview de `.claude/launch.json` no arrancó (tope de 5 servidores por carpeta, ocupados por otras sesiones), así que se probó con un `http.server` propio en el puerto 5611.
+- Fuera de eso, no hubo desvíos.
 
 ## Bloqueados
 Ninguno.
 
 ## Iteraciones
-14 de 20.
+12 de 20.

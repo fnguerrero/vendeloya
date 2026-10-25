@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700;6..12,800&display=swap">
-  <link rel="stylesheet" href="styles.css?v=13">
+  <link rel="stylesheet" href="styles.css?v=14">
 </head>
 <body>
   <header class="barra">
@@ -42,7 +42,9 @@
       <label class="boton secundario solo-celu">Sacar foto con la cámara
         <input id="camara" type="file" accept="image/*" capture="environment" hidden>
       </label>
+      <div id="aviso-inicio" class="avisos" role="status" hidden></div>
       <button id="analizar" class="boton principal" type="button" disabled>Armar la publicación</button>
+      <p class="ayuda centrado atajo">También podés pegar una foto con Ctrl+V.</p>
     </section>
 
     <!-- Inicio: historial -->
@@ -50,6 +52,14 @@
       <div class="titulo-seccion">
         <h2>Tus publicaciones</h2>
         <button id="refrescar-historial" class="enlace" type="button">Actualizar</button>
+      </div>
+      <div id="historial-filtros" class="filtros" hidden>
+        <div class="filtro-chips" role="group" aria-label="Filtrar por estado">
+          <button type="button" class="filtro activo" data-filtro="">Todas <small></small></button>
+          <button type="button" class="filtro" data-filtro="borrador">Borradores <small></small></button>
+          <button type="button" class="filtro" data-filtro="publicada">Publicadas <small></small></button>
+        </div>
+        <input id="historial-buscar" type="search" placeholder="Buscar por título" aria-label="Buscar por título" autocomplete="off">
       </div>
       <p id="historial-vacio" class="ayuda">Todavía no analizaste nada. Lo que armes queda guardado acá, aunque cierres la app.</p>
       <ul id="historial-lista" class="historial"></ul>
@@ -63,7 +73,9 @@
           <span id="guardado" class="guardado" aria-live="polite"></span>
         </div>
         <div class="col-scroll">
-          <figure class="foto-principal"><img id="foto-grande" alt="Foto principal"></figure>
+          <figure class="foto-principal"><img id="foto-grande" alt="Foto principal">
+            <button id="usar-portada" class="usar-portada" type="button" hidden>★ Usar de portada</button>
+          </figure>
           <div id="fotos-revision" class="tira"></div>
           <p class="ia-etiqueta">Lo que vio la IA</p>
           <h3 id="ia-producto" class="ia-producto"></h3>
@@ -78,7 +90,8 @@
       </aside>
 
       <div class="col col-centro tarjeta">
-        <label class="campo">Título <span id="contador" class="contador"></span>
+        <label class="campo">Título <button type="button" class="enlace volver-ia" data-campo="titulo" hidden>↺ Propuesta de la IA</button>
+          <span id="contador" class="contador"></span>
           <input id="titulo" type="text" autocomplete="off">
         </label>
 
@@ -111,7 +124,7 @@
           <p id="precio-fuente" class="ayuda"></p>
         </div>
 
-        <label class="campo campo-descripcion">Descripción
+        <label class="campo campo-descripcion">Descripción <button type="button" class="enlace volver-ia" data-campo="descripcion" hidden>↺ Propuesta de la IA</button>
           <textarea id="descripcion"></textarea>
         </label>
       </div>
@@ -166,7 +179,7 @@
             <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M2.5 11.3 20.6 3.6c.6-.2 1.1.3.9.9l-7.7 18.1c-.3.6-1.1.5-1.3-.1l-2.2-6.8-6.8-2.2c-.6-.2-.7-1-.1-1.3z"/></svg>
             <span id="publicar-texto">Publicar</span>
           </button>
-          <p class="ayuda centrado">Antes de publicar, MercadoLibre lo revisa y te pide confirmar.</p>
+          <p class="ayuda centrado">Antes de publicar, MercadoLibre lo revisa y te pide confirmar.<span class="atajo"> Atajo: Ctrl+Enter.</span></p>
         </div>
       </div>
     </section>
@@ -177,6 +190,10 @@
       <h2>¡Publicada!</h2>
       <p id="listo-texto"></p>
       <a id="listo-link" class="boton principal" target="_blank" rel="noopener">Ver la publicación</a>
+      <div id="listo-compartir" class="fila">
+        <button id="compartir" class="boton secundario" type="button">Compartir</button>
+        <button id="copiar-link" class="boton secundario" type="button">Copiar link</button>
+      </div>
       <button id="otra" class="boton secundario ancho" type="button">Publicar otra cosa</button>
     </section>
   </main>
@@ -220,6 +237,6 @@
   </dialog>
 
   <script src="config.js?v=1"></script>
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

@@ -474,3 +474,53 @@ dialog.config .titulo-seccion h2 { margin: 0; }
   .foto-principal { aspect-ratio: auto; height: 150px; }
   .ia-estado { font-size: .82rem; }
 }
+
+/* ============================================================
+   Ronda 2 (25/10/2026): mejoras de uso
+   ============================================================ */
+
+/* Portada y rotación en las miniaturas del inicio */
+.miniatura .rotar { top: auto; bottom: 4px; }
+.miniatura .portada { top: auto; right: auto; bottom: 4px; left: 4px; color: var(--amarillo); }
+.miniatura .es-portada {
+  position: absolute; left: 4px; bottom: 4px; padding: 3px 8px; border-radius: 999px;
+  background: var(--amarillo); color: #333; font-size: .72rem; font-weight: 800;
+}
+
+/* Revisión: usar la foto que se está mirando de portada */
+.foto-principal { position: relative; }
+.usar-portada {
+  position: absolute; left: 8px; bottom: 8px; padding: 5px 10px; border: 0; border-radius: 999px;
+  background: rgba(0, 0, 0, .65); color: #fff; font: inherit; font-size: .8rem; font-weight: 700; cursor: pointer;
+}
+.usar-portada:hover { background: rgba(0, 0, 0, .8); }
+
+/* Volver a lo que propuso la IA */
+.volver-ia { margin-left: 8px; padding: 0; font-size: .8rem; font-weight: 600; }
+
+/* Botón dentro del indicador de guardado */
+.guardado .enlace { padding: 0; font-size: inherit; }
+
+/* Aviso del checklist que no frena */
+.checklist li.aviso { background: var(--aviso-fondo); color: #8a6100; }
+.checklist li.aviso::before { content: "!"; background: #f5a623; }
+
+/* Filtros del historial */
+.filtros { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 2px 0 10px; }
+.filtro-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.filtro {
+  padding: 5px 12px; border: 1px solid var(--borde-campo); border-radius: 999px; background: none;
+  color: var(--texto); font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer;
+}
+.filtro small { color: var(--suave); font-weight: 400; }
+.filtro.activo { background: var(--azul-claro); border-color: var(--azul); color: var(--azul); }
+.filtros input[type="search"] {
+  flex: 1 1 180px; min-width: 0; padding: 7px 10px; border: 1px solid var(--borde-campo); border-radius: var(--radio);
+  background: var(--tarjeta); color: var(--texto); font: inherit; font-size: .9rem;
+}
+
+/* Publicada: compartir */
+#listo-compartir { margin-top: 10px; }
+
+/* Los atajos de teclado no se muestran en pantallas táctiles */
+@media (hover: none) { .atajo { display: none; } }

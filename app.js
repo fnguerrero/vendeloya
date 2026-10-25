@@ -178,7 +178,19 @@ $('cerrar-config').addEventListener('click', () => $('config').close());
 
 $('conectar-ml').addEventListener('click', () => {
   if (DEMO) return;
-  window.open(`${window.VENDELOYA.worker}/oauth/start?k=${encodeURIComponent(clave())}`, '_blank', 'noopener');
+  /* Un formulario POST en vez de ?k= en la URL: así la clave no queda en el
+     historial del navegador ni en los logs del Worker. */
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = `${window.VENDELOYA.worker}/oauth/start`;
+  form.target = '_blank';
+  form.rel = 'noopener';
+  const k = document.createElement('input');
+  k.type = 'hidden'; k.name = 'k'; k.value = clave();
+  form.appendChild(k);
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
 });
 
 $('desconectar-ml').addEventListener('click', async () => {

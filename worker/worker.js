@@ -6,7 +6,7 @@
    de Claude y de la app de MercadoLibre (como secretos).
 
    Rutas:
-     GET  /oauth/start?k=CLAVE   conecta la cuenta de MercadoLibre
+     POST /oauth/start (k=CLAVE) conecta la cuenta de MercadoLibre
      GET  /oauth/callback        vuelta del OAuth (redirect_uri fija)
      GET  /api/estado            ¿hay cuenta conectada? ¿cuál?
      POST /api/analizar          fotos → propuesta de publicación
@@ -84,7 +84,13 @@ function redirectUri(request) {
 }
 
 async function oauthStart(request, env) {
-  if (!iguales(new URL(request.url).searchParams.get('k'), env.APP_SECRET)) {
+  /* La clave llega en el cuerpo de un formulario y no en la URL: una URL queda
+     en el historial del navegador y en los logs de Cloudflare. */
+  if (request.method !== 'POST') {
+    return html('Abrilo desde la app', 'La conexión con MercadoLibre se abre desde Ajustes, con el botón "Conectar MercadoLibre".', 405);
+  }
+  const form = await request.formData().catch(() => null);
+  if (!iguales(form && form.get('k'), env.APP_SECRET)) {
     return html('Clave incorrecta', 'Abrí la conexión desde la app, que agrega la clave sola.', 403);
   }
   if (!env.ML_CLIENT_ID || !env.ML_CLIENT_SECRET) {

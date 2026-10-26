@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700;6..12,800&display=swap">
-  <link rel="stylesheet" href="styles.css?v=14">
+  <link rel="stylesheet" href="styles.css?v=15">
 </head>
 <body>
   <header class="barra">
@@ -27,11 +27,16 @@
     </div>
   </header>
 
+  <div id="aviso-red" class="aviso-red" role="status" hidden>Sin conexión. Lo que escribas se guarda cuando vuelva la señal.</div>
+
   <main>
     <!-- Inicio: fotos nuevas -->
     <section id="paso-fotos" class="tarjeta">
       <h2>¿Qué vendés hoy?</h2>
       <p class="ayuda">De 1 a 6 fotos, con buena luz y el producto entero. Si tiene marca, modelo o código de barras, que se vea.</p>
+      <div id="aviso-cuenta" class="avisos" role="status" hidden>
+        <p><span id="aviso-cuenta-texto"></span> <button id="aviso-cuenta-abrir" class="enlace" type="button">Abrir Configuración</button></p>
+      </div>
       <div id="miniaturas" class="miniaturas"></div>
       <label id="zona-fotos" class="zona-fotos">
         <svg viewBox="0 0 24 24" width="40" height="40" aria-hidden="true"><path fill="currentColor" d="M9 3 7.2 5H4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-3.2L15 3H9zm3 5a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>
@@ -91,6 +96,7 @@
 
       <div class="col col-centro tarjeta">
         <label class="campo">Título <button type="button" class="enlace volver-ia" data-campo="titulo" hidden>↺ Propuesta de la IA</button>
+          <button id="prolijar" type="button" class="enlace mini-enlace" hidden>✨ Prolijar</button>
           <span id="contador" class="contador"></span>
           <input id="titulo" type="text" autocomplete="off">
         </label>
@@ -121,10 +127,17 @@
               <button type="button" class="rango-btn" data-precio="max"></button>
             </div>
           </div>
+          <div class="precio-ajustes" role="group" aria-label="Ajustar el precio">
+            <button type="button" class="ajuste-btn" data-ajuste="-5">−5 %</button>
+            <button type="button" class="ajuste-btn" data-ajuste="5">+5 %</button>
+            <button type="button" class="ajuste-btn" data-ajuste="redondear" title="Redondea el precio a un número más lindo">Redondear</button>
+          </div>
           <p id="precio-fuente" class="ayuda"></p>
         </div>
 
         <label class="campo campo-descripcion">Descripción <button type="button" class="enlace volver-ia" data-campo="descripcion" hidden>↺ Propuesta de la IA</button>
+          <button id="agregar-cierre" type="button" class="enlace mini-enlace" hidden>+ Mi cierre</button>
+          <span id="contador-desc" class="contador"></span>
           <textarea id="descripcion"></textarea>
         </label>
       </div>
@@ -161,6 +174,13 @@
             </label>
           </details>
 
+          <details id="grupo-nota" class="grupo">
+            <summary><span>Nota privada</span><small>no se publica</small></summary>
+            <label class="campo">Para vos (dónde está, cuánto costó, a quién le prometiste)
+              <textarea id="nota" rows="3" placeholder="Solo se guarda en tu borrador"></textarea>
+            </label>
+          </details>
+
           <details id="bloque-listos" class="grupo">
             <summary><span>Obligatorios ya completos</span><small id="resumen-listos"></small></summary>
             <div id="atributos-listos"></div>
@@ -194,6 +214,7 @@
         <button id="compartir" class="boton secundario" type="button">Compartir</button>
         <button id="copiar-link" class="boton secundario" type="button">Copiar link</button>
       </div>
+      <button id="otra-igual" class="boton secundario ancho" type="button">Hacer otra igual (borrador nuevo)</button>
       <button id="otra" class="boton secundario ancho" type="button">Publicar otra cosa</button>
     </section>
   </main>
@@ -210,6 +231,17 @@
       <button id="conectar-ml" class="boton secundario" type="button">Conectar</button>
       <button id="desconectar-ml" class="boton peligro" type="button">Desconectar MercadoLibre</button>
     </div>
+
+    <h3>Mi cierre de descripción</h3>
+    <label class="campo">
+      <textarea id="cierre" rows="3" placeholder="Ej.: Retiro por Caseros, de lunes a viernes después de las 18. No hago envíos."></textarea>
+    </label>
+    <div class="fila">
+      <button id="guardar-cierre" class="boton secundario" type="button">Guardar cierre</button>
+    </div>
+    <p class="ayuda">En cada publicación aparece el botón "+ Mi cierre" para sumarlo al final de la descripción. Se guarda en este dispositivo.</p>
+
+    <button id="instalar-app" class="boton secundario ancho" type="button" hidden>Instalar la app en este dispositivo</button>
 
     <h3>Clave de la app</h3>
     <label class="campo">

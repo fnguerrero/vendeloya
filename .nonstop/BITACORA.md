@@ -1,15 +1,16 @@
-# Bitácora — ronda 2: 10 mejoras de uso
+# Bitácora — ronda 3: 10 mejoras de uso
 
-#0 — Bootstrap: ronda 1 archivada en ronda-1-esteticas/, SPEC y TODO de 10 mejoras de uso (solo front) — n/a
-#1 — Ganchos: window.__vy en demo y ?falla=<ruta> (o FALLAS.add) para simular errores — __vy.estado accesible; analizar falla con FALLAS
-#2 — Errores en pantalla: aviso del inicio con Reintentar para el análisis; fotos que no se leen, de más o chicas, categoría, abrir y desconectar avisan sin alert — falla simulada: aviso visible, 3 fotos intactas, Reintentar llega a la revisión
-#3 — Portada (★, etiqueta "Portada" en la primera) y rotar 90° (le borra el id de ML) — la foto 3 pasa a primera; 800×600 → 600×800 sin id
-#4 — Pegar fotos con Ctrl+V en el inicio — ClipboardEvent con un File: de 3 a 4 fotos
-#5 — Guardado seguro: al ocultar la pestaña o en pagehide guarda ya (keepalive si no lleva fotos); lo extra de un guardado fallido viaja en el siguiente; "No se pudo guardar · Reintentar"; beforeunload solo si falló — visibilitychange guarda a los 500 ms (antes del timer de 1200); con falla, Reintentar guarda
-#6 — Datos de contacto (teléfono, mail, link, WhatsApp) en título o descripción: pendiente que frena y lleva al campo; palabras de promoción en el título: aviso "!" que no frena — 11 casos del detector bien (EAN de 13 dígitos, medidas y precios no cuentan); Publicar enfoca la descripción
-#7 — Ctrl/Cmd+Enter = Publicar (no corre con un diálogo abierto ni esperando) — con pendiente enfoca y resalta el campo; completo abre el confirmar. La primera prueba falló por la prueba: el Modelo ya venía "NA" por defecto, no había pendiente
-#8 — Historial: chips Todas/Borradores/Publicadas con cantidades y buscador sin acentos, desde 5 registros — 7 registros: 4 borradores, 3 publicadas; "lampara" encuentra "Lámpara de pie"; sin resultados muestra "No hay nada con ese filtro."
-#9 — "↺ Propuesta de la IA" en título y descripción, solo si cambiaron — se ve al editar; restaura, se oculta, contador 38/60 y autoguarda
-#10 — Publicada: Compartir (Web Share, oculto si no hay) y Copiar link con toast — stubs: share con título y URL, portapapeles con el link
-#11 — Revisión: "★ Usar de portada" sobre la foto grande cuando no es la primera — la foto 2 pasa a primera, se guarda con miniatura nueva, botón oculto
-#12 — Versión de caché (css 14, app 12, sw vendeloya-9) y verificación final: 1440×800 sin scroll ni desbordes, celu sin scroll horizontal, consola limpia, 18 tests — INFORME escrito
+#0 — Bootstrap: ronda 2 archivada en ronda-2-uso/; Nico confirmó 10 mejoras de uso (solo front); SPEC y TODO de 11 ítems — n/a
+#1 — Ganchos __vy ampliados (hacerOtraIgual, moverFoto, prolijar, redondear, actualizarRed, cierre) — presentes en __vy
+#2 — Reordenar miniaturas arrastrando (dragstart/over/drop, un drop de archivo externo no se confunde) — foto 3 → primera con "Portada"; drop externo agrega la 4ª
+#3 — Falló: al escribir el código, "Prolijar" y "+ Mi cierre" quedaron con la clase .volver-ia, y marcarPropuesta() las recorre buscando data-campo: TypeError en la consola y la revisión ni se abría. Era un bug del código, no de la prueba — se renombró la clase a .mini-enlace
+#4 — Hacer otra igual (⧉ en cada ítem del historial y botón en "Publicada"): borrador nuevo con las fotos sin id de ML, sin ml, nota incluida; el original no se toca — original publicado con id de foto: intacto; copia sin id ni ml, abre la revisión; desde Publicada suma un registro
+#5 — Cierre de descripción (Configuración + "+ Mi cierre"), una sola vez — se agrega al final, el segundo toque avisa que ya está
+#6 — Nota privada (publicacion.nota, "tiene una nota") — se guarda en el borrador, vuelve al reabrir; worker/logica.js no la usa
+#7 — Precio −5 %, +5 %, Redondear (paso 10/100/500/1000 según el monto) — 45.000 → 42.750 → 44.888 → 45.000; 1.234 → 1.200; vacío sigue vacío
+#8 — Prolijar el título (emojis, espacios, signos repetidos, TODO MAYÚSCULAS → Título) — "TALADRO  PERCUTOR!!! 🔥" → "Taladro Percutor!"; sin cambios no aparece; "KR504 500W" intacto
+#9 — Sin conexión: aviso arriba y Armar/Publicar bloqueados, vuelve al reconectar y refresca cuenta/historial — offline/online simulados
+#10 — Aviso de cuenta en el inicio (conectar / faltan secretos / clave) con botón a Configuración; Instalar app (beforeinstallprompt) — demo sin cuenta: aviso visible y abre Configuración; reconectada: se va; instalar llama a prompt() una vez
+#11 — Descripción corta: contador y aviso "!" que no frena (menos de 80) — 14 caracteres: aviso y Publicar habilitado; larga: sin aviso
+#12 — Versión de caché (css 15, app 13, sw vendeloya-10), sintaxis, sin alert() y 18 tests del Worker
+#13 — Verificación final: 1440×800 sin scroll ni desbordes, celu sin scroll horizontal, prueba sin errores no capturados, 18 tests — INFORME escrito

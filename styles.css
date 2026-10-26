@@ -496,7 +496,7 @@ dialog.config .titulo-seccion h2 { margin: 0; }
 .usar-portada:hover { background: rgba(0, 0, 0, .8); }
 
 /* Volver a lo que propuso la IA */
-.volver-ia { margin-left: 8px; padding: 0; font-size: .8rem; font-weight: 600; }
+.volver-ia, .mini-enlace { margin-left: 8px; padding: 0; font-size: .8rem; font-weight: 600; }
 
 /* Botón dentro del indicador de guardado */
 .guardado .enlace { padding: 0; font-size: inherit; }
@@ -524,3 +524,42 @@ dialog.config .titulo-seccion h2 { margin: 0; }
 
 /* Los atajos de teclado no se muestran en pantallas táctiles */
 @media (hover: none) { .atajo { display: none; } }
+
+/* ============================================================
+   Ronda 3 (26/10/2026): más mejoras de uso
+   ============================================================ */
+
+/* Sin conexión */
+.aviso-red {
+  position: sticky; top: 0; z-index: 9; padding: 8px 16px; text-align: center;
+  background: #333; color: #fff; font-size: .85rem; font-weight: 600;
+}
+
+/* Reordenar miniaturas arrastrando */
+.miniatura[draggable="true"] { cursor: grab; }
+.miniatura.moviendo { opacity: .4; }
+.miniatura.destino { outline: 3px solid var(--azul); outline-offset: -3px; }
+
+/* Ajustes del precio */
+.precio-ajustes { display: flex; gap: 6px; margin-top: 8px; }
+.ajuste-btn {
+  flex: 1; padding: 5px 8px; border: 1px solid var(--borde-campo); border-radius: 999px; background: none;
+  color: var(--texto); font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer;
+}
+.ajuste-btn:hover { background: var(--azul-claro); border-color: var(--azul); color: var(--azul); }
+
+/* Nota privada */
+#nota { min-height: 70px; }
+
+/* Hacer otra igual (historial) */
+.item-igual {
+  flex: none; width: 34px; height: 34px; border: 0; border-radius: 50%; background: none;
+  color: var(--suave); font-size: 1.1rem; cursor: pointer;
+}
+.item-igual:hover { background: var(--fondo); color: var(--azul); }
+
+/* Contador de la descripción */
+.campo .contador { font-size: .8rem; }
+
+/* Botones sueltos en el diálogo de Configuración */
+#instalar-app { margin-top: 14px; }

@@ -143,15 +143,59 @@ async function refrescarCuenta() {
     b.classList.toggle('conectada', !!e.conectado);
     b.dataset.conectada = e.conectado ? '1' : '';
     b.dataset.nickname = e.nickname || '';
+    pintarAvisoCuenta(e.conectado ? 'ok' : e.faltan?.length ? 'faltan' : 'conectar');
   } catch (err) {
     b.dataset.faltan = err.faltan ? err.faltan.join(', ') : '';
     b.textContent = err.faltan ? 'Falta configurar' : clave() ? 'Sin conexión' : 'Falta la clave';
     b.classList.remove('conectada');
     b.dataset.conectada = '';
     b.dataset.nickname = '';
+    pintarAvisoCuenta(err.faltan ? 'faltan' : clave() ? 'sin-conexion' : 'clave');
   }
   pintarConfig();
 }
+
+/* En el inicio, un aviso con la salida cuando la cuenta no está lista para publicar. */
+const AVISOS_CUENTA = {
+  conectar: 'Todavía no conectaste tu cuenta de MercadoLibre: sin eso no podés publicar.',
+  faltan: 'Al Worker le faltan secretos, así que todavía no se puede conectar la cuenta.',
+  clave: 'Falta cargar la clave de la app para empezar.'
+};
+function pintarAvisoCuenta(tipo) {
+  estado.cuenta = tipo;
+  $('aviso-cuenta').hidden = !(tipo in AVISOS_CUENTA);
+  $('aviso-cuenta-texto').textContent = AVISOS_CUENTA[tipo] || '';
+}
+$('aviso-cuenta-abrir').addEventListener('click', abrirConfig);
+
+/* Sin señal: aviso arriba y Armar/Publicar frenados (lo editado se guarda al volver). */
+let sinRed = !navigator.onLine;
+function actualizarRed(sin = sinRed) {
+  sinRed = sin;
+  $('aviso-red').hidden = !sin;
+  $('publicar').disabled = sin;
+  $('analizar').disabled = sin || !estado.fotos.length;
+}
+addEventListener('offline', () => actualizarRed(true));
+addEventListener('online', () => {
+  actualizarRed(false);
+  refrescarCuenta();
+  if (!$('historial').hidden) cargarHistorial();
+  if (sinGuardar) guardar();
+});
+
+/* Instalar la app (el navegador avisa cuando se puede). */
+let instalador = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); instalador = e; $('instalar-app').hidden = false; });
+addEventListener('appinstalled', () => { instalador = null; $('instalar-app').hidden = true; toast('App instalada.'); });
+$('instalar-app').addEventListener('click', async () => {
+  const ev = instalador;
+  if (!ev) return;
+  instalador = null;
+  $('instalar-app').hidden = true;
+  ev.prompt();
+  await ev.userChoice?.catch(() => {});
+});
 
 /* ---------- configuración ---------- */
 
@@ -170,6 +214,7 @@ function pintarConfig() {
 
 function abrirConfig() {
   pintarConfig();
+  $('cierre').value = cierre();
   $('config').showModal();
 }
 $('abrir-config').addEventListener('click', abrirConfig);
@@ -215,6 +260,26 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) { guardarAlSalir(); return; }
   refrescarCuenta();
   if (!$('historial').hidden) cargarHistorial();
+});
+
+/* Mi cierre: un texto que se repite al final de las descripciones (retiro, horarios, no envíos…). */
+const cierre = () => local('vendeloya.cierre').trim();
+
+function pintarCierre() {
+  $('agregar-cierre').hidden = !cierre();
+}
+$('guardar-cierre').addEventListener('click', () => {
+  local('vendeloya.cierre', $('cierre').value.trim() || null);
+  pintarCierre();
+  toast($('cierre').value.trim() ? 'Cierre guardado.' : 'Cierre borrado.');
+});
+$('agregar-cierre').addEventListener('click', () => {
+  const texto = cierre();
+  const d = $('descripcion');
+  if (!texto) return;
+  if (d.value.includes(texto)) { toast('Ese cierre ya está en la descripción.'); return; }
+  d.value = `${d.value.trimEnd()}\n\n${texto}`.trimStart();
+  d.dispatchEvent(new Event('input', { bubbles: true }));
 });
 
 $('guardar-clave').addEventListener('click', () => {
@@ -308,11 +373,43 @@ function botonFoto(texto, etiqueta, clase, alHacer) {
   return b;
 }
 
+/** Mueve una foto de lugar (el primero es la portada). */
+function moverFoto(de, a) {
+  if (de === a || !estado.fotos[de] || a < 0 || a >= estado.fotos.length) return;
+  estado.fotos.splice(a, 0, ...estado.fotos.splice(de, 1));
+}
+
+let fotoArrastrada = null;
+
 function dibujarFotos() {
   $('miniaturas').replaceChildren(...estado.fotos.map((f, i) => {
     const d = document.createElement('div');
     d.className = 'miniatura';
+    // En la compu se reordenan arrastrando; en el celu, con la ★.
+    d.draggable = true;
+    d.addEventListener('dragstart', e => {
+      fotoArrastrada = i;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(i));
+      d.classList.add('moviendo');
+    });
+    d.addEventListener('dragend', () => { fotoArrastrada = null; d.classList.remove('moviendo'); });
+    d.addEventListener('dragover', e => {
+      if (fotoArrastrada === null) return;
+      e.preventDefault();
+      d.classList.add('destino');
+    });
+    d.addEventListener('dragleave', () => d.classList.remove('destino'));
+    d.addEventListener('drop', e => {
+      if (fotoArrastrada === null) return;
+      e.preventDefault();
+      e.stopPropagation();
+      moverFoto(fotoArrastrada, i);
+      fotoArrastrada = null;
+      dibujarFotos();
+    });
     const img = document.createElement('img');
+    img.draggable = false;
     img.src = f.dataUrl;
     img.alt = `Foto ${i + 1}`;
     d.append(img,
@@ -328,7 +425,7 @@ function dibujarFotos() {
     }
     return d;
   }));
-  $('analizar').disabled = !estado.fotos.length;
+  $('analizar').disabled = sinRed || !estado.fotos.length;
   $('zona-fotos').hidden = estado.fotos.length >= MAX_FOTOS;
   $('zona-fotos').querySelector('strong').textContent = estado.fotos.length ? 'Agregar más fotos' : 'Elegí o arrastrá tus fotos';
   $('zona-fotos').querySelector('span').textContent = estado.fotos.length
@@ -410,6 +507,8 @@ function mostrarRevision(r, guardada) {
   $('condicion').value = p.condicion || 'usado';
   $('precio').value = miles(p.precio);
   $('descripcion').value = p.descripcion || '';
+  $('nota').value = p.nota || '';
+  $('grupo-nota').querySelector('small').textContent = p.nota ? 'tiene una nota' : 'no se publica';
   $('garantia').value = p.garantia || '';
   $('envio').value = p.envio ?? 'retiro';
   $('cantidad').value = p.cantidad || 1;
@@ -431,8 +530,33 @@ function mostrarRevision(r, guardada) {
   resumirVenta();
   actualizarChecklist();
   marcarPropuesta();
+  marcarProlijar();
+  pintarCierre();
   pantalla('revision');
 }
+
+/* ---------- título prolijo ---------- */
+
+/** Saca emojis, espacios dobles y signos repetidos; si está todo en mayúsculas, lo pasa a Título Normal. */
+function prolijar(texto) {
+  let s = String(texto).replace(/[\p{Extended_Pictographic}️‍]/gu, '')
+    .replace(/([!?¡¿.,*\-_~])\1+/g, '$1')
+    .replace(/\s+/g, ' ').trim();
+  const letras = s.replace(/[^\p{L}]/gu, '');
+  if (letras.length > 3 && letras === letras.toUpperCase()) {
+    s = s.toLowerCase().replace(/(^|[\s(/-])(\p{L})/gu, (_, antes, letra) => antes + letra.toUpperCase());
+  }
+  return s;
+}
+function marcarProlijar() {
+  const t = $('titulo').value;
+  $('prolijar').hidden = !t.trim() || prolijar(t) === t.trim();
+}
+$('prolijar').addEventListener('click', () => {
+  $('titulo').value = prolijar($('titulo').value);
+  $('titulo').dispatchEvent(new Event('input', { bubbles: true }));
+  $('titulo').focus();
+});
 
 /* Foto grande arriba; las miniaturas la cambian (solo si hay más de una). */
 function dibujarFotosRevision() {
@@ -521,6 +645,22 @@ for (const b of document.querySelectorAll('.rango-btn')) {
     $('precio').dispatchEvent(new Event('input', { bubbles: true }));
   });
 }
+/* −5 %, +5 % y Redondear: ajustes rápidos sobre lo que ya está escrito. */
+function redondear(v) {
+  const paso = v >= 100000 ? 1000 : v >= 10000 ? 500 : v >= 1000 ? 100 : 10;
+  return Math.max(paso, Math.round(v / paso) * paso);
+}
+for (const b of document.querySelectorAll('.ajuste-btn')) {
+  b.addEventListener('click', () => {
+    const v = precioActual();
+    if (!v) return;
+    const a = b.dataset.ajuste;
+    const nuevo = a === 'redondear' ? redondear(v) : Math.round(v * (1 + Number(a) / 100));
+    $('precio').value = miles(nuevo);
+    $('precio').dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
 /* El precio se ve con puntos de miles ("380.000") pero por dentro es un número. */
 const precioActual = () => Number(String($('precio').value).replace(/\D/g, '')) || 0;
 const miles = n => (Number(n) > 0 ? Math.round(Number(n)).toLocaleString('es-AR') : '');
@@ -668,9 +808,13 @@ function pendientes() {
   // Las palabras de promoción en el título no frenan, pero MercadoLibre las desaconseja.
   const promo = PROMO.exec(titulo);
   if (promo) items.push({ ok: true, aviso: true, texto: `"${promo[0]}" en el título no suma`, el: $('titulo') });
+  // Una descripción de una línea vende menos: se avisa, pero no frena.
+  const largo = $('descripcion').value.trim().length;
+  if (largo < DESCRIPCION_MINIMA) items.push({ ok: true, aviso: true, texto: `Descripción corta (${largo})`, el: $('descripcion') });
   return { items, pendientes: items.filter(i => !i.ok) };
 }
 
+const DESCRIPCION_MINIMA = 80;
 const PROMO = /env[ií]o gratis|oferta|imperdible|liquido|liquidaci[oó]n|mejor precio|promo/i;
 const CONTACTO = [
   [/[\w.+-]+@[\w-]+\.[a-z]{2,}/i, 'el mail'],
@@ -692,6 +836,7 @@ function contacto(texto) {
 function actualizarChecklist() {
   if ($('paso-revision').hidden && !estado.analisis) return;
   const { items, pendientes: faltan } = pendientes();
+  $('contador-desc').textContent = `${$('descripcion').value.trim().length} caracteres`;
   $('checklist').replaceChildren(...items.map(i => {
     const li = document.createElement('li');
     li.className = !i.ok ? 'pendiente' : i.aviso ? 'aviso' : 'ok';
@@ -707,6 +852,8 @@ function actualizarChecklist() {
 function tocado(e) {
   actualizarChecklist();
   marcarPropuesta();
+  marcarProlijar();
+  if (e?.target?.id === 'nota') $('grupo-nota').querySelector('small').textContent = e.target.value.trim() ? 'tiene una nota' : 'no se publica';
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
   if (['envio', 'cantidad', 'tipo'].includes(e?.target?.id)) resumirVenta();
@@ -839,7 +986,15 @@ function dibujarHistorial(registros) {
     borrar.setAttribute('aria-label', `${borrar.title}: ${r.titulo}`);
     borrar.onclick = () => borrarRegistro(r, historialVista.registros);
 
-    li.append(abrir, borrar);
+    const igual = document.createElement('button');
+    igual.type = 'button';
+    igual.className = 'item-igual';
+    igual.textContent = '⧉';
+    igual.title = 'Hacer otra igual (borrador nuevo con las mismas fotos y datos)';
+    igual.setAttribute('aria-label', `Hacer otra igual: ${r.titulo}`);
+    igual.onclick = () => hacerOtraIgual(r.id);
+
+    li.append(abrir, igual, borrar);
     return li;
   }));
 }
@@ -880,6 +1035,33 @@ async function abrirRegistro(id, { silencioso = false } = {}) {
   }
 }
 
+/**
+ * Un borrador nuevo con las fotos y los datos de otro (para publicar algo parecido,
+ * o volver a publicar). No arrastra los ids de foto de MercadoLibre ni el link.
+ */
+async function hacerOtraIgual(id) {
+  esperar('Copiando…');
+  try {
+    const reg = await api(`/api/registros/${id}`);
+    if (!reg.analisis) throw new Error('Ese registro no tiene análisis.');
+    const nuevo = nuevoId();
+    await api(`/api/registros/${nuevo}`, {
+      fotos: (reg.fotos || []).map(f => ({ dataUrl: f.dataUrl })),
+      thumb: reg.thumb,
+      analisis: reg.analisis,
+      publicacion: reg.publicacion,
+      estado: 'borrador'
+    }, 'PUT');
+    await abrirRegistro(nuevo);
+    toast('Listo: es un borrador nuevo, el original no se toca.');
+  } catch (e) {
+    toast(`No se pudo copiar: ${e.message}`);
+  } finally {
+    esperar('');
+  }
+}
+$('otra-igual').addEventListener('click', () => hacerOtraIgual(estado.registroId));
+
 $('refrescar-historial').addEventListener('click', cargarHistorial);
 
 function volverAlInicio() {
@@ -916,6 +1098,7 @@ function leerPublicacion() {
     garantiaTiempo: garantia === 'Garantía del vendedor' ? '30 días' : '',
     envio: $('envio').value,
     descripcion: $('descripcion').value,
+    nota: $('nota').value.trim(), // privada: el Worker solo arma el ítem con los campos que conoce
     maxTitulo: estado.categoria?.maxTitulo || 60,
     pideGtin: !!estado.categoria?.pideGtin,
     categoriaDatos: estado.categoria,
@@ -1104,7 +1287,8 @@ async function apiDemo(ruta, cuerpo, metodo) {
 if (DEMO) {
   document.title = 'VendeloYa (demo)';
   // Ganchos para probar sin manos (solo en el demo).
-  window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista };
+  window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista,
+    hacerOtraIgual, moverFoto, prolijar, redondear, actualizarRed, cierre };
 }
 dibujarFotos();
 refrescarCuenta();

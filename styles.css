@@ -345,8 +345,9 @@ dialog.config .titulo-seccion h2 { margin: 0; }
   body.revisando main { flex: 1; min-height: 0; max-width: none; width: 100%; padding: 12px 16px; display: block; }
   .revision { height: 100%; grid-template-columns: 290px minmax(0, 1fr) 380px; align-items: stretch; }
   .revision .col { height: 100%; overflow: hidden; }
-  .revision .col-scroll { flex: 1; overflow: auto; }
-  .col-centro { overflow: auto !important; }
+  /* El margen a la derecha evita que la barra de desplazamiento (que en Windows se superpone) tape el texto. */
+  .revision .col-scroll { flex: 1; overflow: auto; scrollbar-gutter: stable; padding-right: 12px; }
+  .col-centro { overflow: auto !important; scrollbar-gutter: stable; padding-right: 20px; }
   .col-centro > .campo:first-child { margin-top: 0; }
   .campo-descripcion { flex: 1; display: flex; flex-direction: column; min-height: 0; }
   .campo-descripcion textarea { flex: 1; min-height: 120px; resize: none; }

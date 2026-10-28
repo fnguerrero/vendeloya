@@ -414,7 +414,8 @@ function dibujarFotos() {
     img.alt = `Foto ${i + 1}`;
     d.append(img,
       botonFoto('×', `Sacar foto ${i + 1}`, 'sacar', () => { estado.fotos.splice(i, 1); dibujarFotos(); }),
-      botonFoto('⟳', `Rotar foto ${i + 1}`, 'rotar', () => rotarFoto(i)));
+      botonFoto('⟳', `Rotar foto ${i + 1}`, 'rotar', () => rotarFoto(i)),
+      botonFoto('✎', `Editar foto ${i + 1} (recortar, ajustar)`, 'editar', () => abrirEditor(i)));
     if (i === 0) {
       const s = document.createElement('span');
       s.className = 'es-portada';
@@ -558,9 +559,9 @@ $('prolijar').addEventListener('click', () => {
   $('titulo').focus();
 });
 
-/* Foto grande arriba; las miniaturas la cambian (solo si hay más de una). */
-function dibujarFotosRevision() {
-  $('fotos-revision').replaceChildren(...(estado.fotos.length > 1 ? estado.fotos : []).map((f, i) => {
+/* Foto grande arriba; las miniaturas la cambian (solo si hay más de una) y el "+" suma otra. */
+function dibujarFotosRevision(vista = 0) {
+  const minis = (estado.fotos.length > 1 ? estado.fotos : []).map((f, i) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'mini';
@@ -571,9 +572,41 @@ function dibujarFotosRevision() {
     b.append(img);
     b.onclick = () => elegirFoto(i);
     return b;
-  }));
-  elegirFoto(0);
+  });
+  if (estado.fotos.length < MAX_FOTOS) {
+    const mas = document.createElement('button');
+    mas.type = 'button';
+    mas.className = 'mini mas';
+    mas.textContent = '+';
+    mas.title = 'Agregar otra foto';
+    mas.setAttribute('aria-label', 'Agregar otra foto');
+    mas.onclick = () => $('galeria-rev').click();
+    minis.push(mas);
+  }
+  $('fotos-revision').replaceChildren(...minis);
+  elegirFoto(Math.max(0, Math.min(vista, estado.fotos.length - 1)));
 }
+
+/**
+ * Las fotos cambiaron de orden, se editaron, se sacaron o se sumaron: se redibuja
+ * donde se estén viendo y, en la revisión, se guarda (con la miniatura si cambió la portada).
+ */
+async function fotosCambiaron({ portada = false } = {}) {
+  dibujarFotos();
+  if ($('paso-revision').hidden) return;
+  dibujarFotosRevision(estado.fotoVista || 0);
+  tocado();
+  guardar({ fotos: estado.fotos, ...(portada && estado.fotos.length ? await miniatura() : {}) });
+}
+
+$('editar-foto').addEventListener('click', () => abrirEditor(estado.fotoVista || 0));
+$('galeria-rev').addEventListener('change', async e => {
+  const archivos = [...e.target.files];
+  e.target.value = '';
+  await agregarFotos(archivos);
+  if (!$('aviso-inicio').hidden) toast($('aviso-inicio').textContent);
+  fotosCambiaron();
+});
 
 function elegirFoto(i) {
   estado.fotoVista = i;
@@ -950,7 +983,7 @@ const historialVista = { registros: [], filtro: '', busqueda: '' };
 const sinAcentos = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const enFiltro = (r, f) => !f || (f === 'publicada' ? r.estado === 'publicada' : r.estado !== 'publicada');
 
-for (const b of document.querySelectorAll('.filtro')) {
+for (const b of document.querySelectorAll('#historial-filtros .filtro')) {
   b.addEventListener('click', () => { historialVista.filtro = b.dataset.filtro; dibujarHistorial(historialVista.registros); });
 }
 $('historial-buscar').addEventListener('input', e => { historialVista.busqueda = e.target.value; dibujarHistorial(historialVista.registros); });
@@ -961,7 +994,7 @@ function dibujarHistorial(registros) {
   const conFiltros = todos.length >= MIN_FILTROS;
   $('historial-filtros').hidden = !conFiltros;
   const { filtro, busqueda } = conFiltros ? historialVista : { filtro: '', busqueda: '' };
-  for (const b of document.querySelectorAll('.filtro')) {
+  for (const b of document.querySelectorAll('#historial-filtros .filtro')) {
     b.classList.toggle('activo', b.dataset.filtro === filtro);
     b.querySelector('small').textContent = todos.filter(r => enFiltro(r, b.dataset.filtro)).length;
   }

@@ -14,3 +14,8 @@
 #11 — Descripción corta: contador y aviso "!" que no frena (menos de 80) — 14 caracteres: aviso y Publicar habilitado; larga: sin aviso
 #12 — Versión de caché (css 15, app 13, sw vendeloya-10), sintaxis, sin alert() y 18 tests del Worker
 #13 — Verificación final: 1440×800 sin scroll ni desbordes, celu sin scroll horizontal, prueba sin errores no capturados, 18 tests — INFORME escrito
+
+# Ronda 4 (28/10/2026): editor de fotos
+#1 — editor.js nuevo (recorte con proporciones, giro, brillo/contraste/saturación/nitidez manuales, mover/portada/sacar, volver a la original) + "+" para sumar fotos en la revisión. Sin IA: Nico eligió Gemini pero se corrigió que Gemini no tiene capa gratis para imágenes (US$ 0,034 por imagen), y decidió dejar solo el editor; la mejora NUNCA es automática
+#2 — Bug propio: los botones del editor usaban la clase .filtro, que el historial recorría con querySelectorAll('.filtro') (rompía el historial: "Cannot set properties of null"). Se acotó el selector a #historial-filtros .filtro
+#3 — Verificación del editor en el demo (compu y celu 375×812): recorte libre (arrastrar esquina y mover, sin salirse de la foto), 1:1 con el aspecto trabado (539×539 real), girar (600×900 → 900×600), brillo (135 → 231), nitidez/contraste/saturación, restablecer, doble clic a 0, volver a la original (1000×600), mover ◀▶ / portada / sacar, "✎ Editar foto" y "+" en la revisión, guardado con las fotos y sus originales en la nube, última foto no se puede sacar; sin errores no capturados, sin scroll horizontal; 18 tests del Worker

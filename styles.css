@@ -564,3 +564,66 @@ dialog.config .titulo-seccion h2 { margin: 0; }
 
 /* Botones sueltos en el diálogo de Configuración */
 #instalar-app { margin-top: 14px; }
+
+/* ============================================================
+   Editor de fotos (28/10/2026)
+   ============================================================ */
+
+/* Botones nuevos sobre las fotos */
+.miniatura .editar { top: 4px; right: auto; left: 4px; }
+.editar-foto {
+  position: absolute; right: 8px; bottom: 8px; padding: 5px 10px; border: 0; border-radius: 999px;
+  background: rgba(0, 0, 0, .65); color: #fff; font: inherit; font-size: .8rem; font-weight: 700; cursor: pointer;
+}
+.editar-foto:hover { background: rgba(0, 0, 0, .8); }
+.mini.mas {
+  display: grid; place-items: center; width: 64px; height: 64px; flex: none; font-size: 1.6rem; font-weight: 700;
+  color: var(--azul); background: var(--azul-claro); opacity: 1;
+}
+
+/* La ventana del editor */
+.editor { width: min(980px, calc(100vw - 16px)); max-width: none; max-height: calc(100vh - 16px); padding: 0; overflow: auto; }
+.editor[open] { display: grid; grid-template-columns: minmax(0, 1fr); }
+.editor-cab {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px;
+  position: sticky; top: 0; z-index: 2; background: var(--tarjeta); border-bottom: 1px solid var(--borde);
+}
+.editor-cab .boton.principal { width: auto; margin: 0; padding: 8px 20px; }
+.editor-escena { display: grid; justify-items: center; align-content: center; gap: 6px; padding: 12px; background: #1d1d1d; min-height: 220px; }
+.editor-caja { position: relative; line-height: 0; touch-action: none; user-select: none; overflow: hidden; }
+.editor-caja canvas { display: block; }
+.recorte {
+  position: absolute; box-sizing: border-box; border: 2px solid #fff; cursor: move; touch-action: none;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, .55);
+  background-image:
+    linear-gradient(to right, transparent 33%, rgba(255,255,255,.35) 33% calc(33% + 1px), transparent calc(33% + 1px) 66%, rgba(255,255,255,.35) 66% calc(66% + 1px), transparent calc(66% + 1px)),
+    linear-gradient(to bottom, transparent 33%, rgba(255,255,255,.35) 33% calc(33% + 1px), transparent calc(33% + 1px) 66%, rgba(255,255,255,.35) 66% calc(66% + 1px), transparent calc(66% + 1px));
+}
+.asa { position: absolute; width: 26px; height: 26px; background: transparent; touch-action: none; }
+.asa::after { content: ""; position: absolute; width: 12px; height: 12px; background: #fff; border-radius: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,.5); }
+.asa[data-asa="nw"] { left: -13px; top: -13px; cursor: nwse-resize; }
+.asa[data-asa="ne"] { right: -13px; top: -13px; cursor: nesw-resize; }
+.asa[data-asa="sw"] { left: -13px; bottom: -13px; cursor: nesw-resize; }
+.asa[data-asa="se"] { right: -13px; bottom: -13px; cursor: nwse-resize; }
+.asa::after { left: 7px; top: 7px; }
+.editor-medidas { color: #cfcfcf; font-size: .78rem; line-height: 1.2; }
+.editor-medidas.chica { color: #ffb347; }
+.editor-medidas.chica::after { content: " · chica para MercadoLibre"; }
+
+.editor-herramientas { padding: 12px 14px 16px; display: grid; gap: 4px; align-content: start; }
+.editor-sub { margin: 10px 0 2px; font-weight: 800; font-size: .85rem; }
+.editor-sub small { font-weight: 400; color: var(--suave); }
+.editor-fila { display: flex; flex-wrap: wrap; gap: 6px; }
+.deslizador { display: grid; grid-template-columns: 90px minmax(0, 1fr) 34px; align-items: center; gap: 8px; font-size: .85rem; font-weight: 600; }
+.deslizador input { width: 100%; accent-color: var(--azul); }
+.deslizador output { text-align: right; color: var(--suave); font-weight: 400; }
+.filtro.peligro-chico { color: var(--error); border-color: color-mix(in srgb, var(--error) 50%, transparent); }
+.filtro:disabled { opacity: .4; cursor: not-allowed; }
+
+/* En la compu: la foto a la izquierda y las herramientas a la derecha */
+@media (min-width: 820px) {
+  .editor[open] { grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto 1fr; }
+  .editor-cab { grid-column: 1 / -1; }
+  .editor-escena { min-height: 420px; }
+  .editor-herramientas { overflow: auto; }
+}

@@ -691,6 +691,20 @@ function dibujarIA(id) {
   $('ia-consejos-titulo').hidden = !consejos.length;
 }
 
+/*
+ * MercadoLibre rechaza un número suelto en los datos con unidad ("Alto 200":
+ * "The provided unit is not valid"). Si el valor es solo un número, se le agrega
+ * la unidad más razonable de las que acepta el atributo (cm, kg, W…).
+ */
+const UNIDADES_PREFERIDAS = ['cm', 'kg', 'W', 'V', 'L', 'ml', 'g', 'mm', 'm'];
+
+function conUnidad(a, texto) {
+  const t = String(texto ?? '').trim();
+  if (a.tipo !== 'number_unit' || !a.unidades?.length || !/^\d+([.,]\d+)?$/.test(t)) return t;
+  const unidad = UNIDADES_PREFERIDAS.find(u => a.unidades.includes(u)) || a.unidades[0];
+  return `${t.replace(',', '.')} ${unidad}`;
+}
+
 function campoAtributo(a) {
   const l = document.createElement('label');
   l.className = `campo${a.requerido ? ' requerido' : ''}`;
@@ -711,6 +725,8 @@ function campoAtributo(a) {
     if (a.unidades.length) control.placeholder = `Ej.: 10 ${a.unidades[0]}`;
   }
   control.dataset.id = a.id;
+  // Al salir del campo, un número suelto queda con su unidad ("200" → "200 cm").
+  if (a.tipo === 'number_unit') control.addEventListener('change', () => { control.value = conUnidad(a, control.value); });
   l.append(n, control);
   return l;
 }
@@ -1102,7 +1118,7 @@ function leerPublicacion() {
     maxTitulo: estado.categoria?.maxTitulo || 60,
     pideGtin: !!estado.categoria?.pideGtin,
     categoriaDatos: estado.categoria,
-    atributos: estado.atributos.map(a => ({ ...a, valor: valores.get(a.id) || '' }))
+    atributos: estado.atributos.map(a => ({ ...a, valor: conUnidad(a, valores.get(a.id) || '') }))
   };
 }
 
@@ -1227,6 +1243,8 @@ async function apiDemo(ruta, cuerpo, metodo) {
     { id: 'COLOR', nombre: 'Color', tipo: 'list', requerido: false, unidades: [], opciones: [{ id: '1', nombre: 'Naranja' }, { id: '2', nombre: 'Negro' }], valor: 'Naranja' },
     { id: 'WEIGHT', nombre: 'Peso', tipo: 'number_unit', requerido: false, unidades: ['kg'], opciones: [], valor: '' },
     // Como en los borradores de antes del 22/10: el GTIN llegaba como obligatorio.
+    // Como el caso real de una biblioteca: un número suelto, sin unidad, que MercadoLibre rechaza.
+    { id: 'HEIGHT', nombre: 'Alto', tipo: 'number_unit', requerido: true, unidades: ['in', 'millas', 'yd', 'U', 'mil', 'mm', 'cm', 'manos', 'ft', 'pulgadas', 'm', 'nm', 'µm', 'km', '"'], opciones: [], valor: '200' },
     { id: 'GTIN', nombre: 'Código universal de producto', tipo: 'string', requerido: true, unidades: [], opciones: [], valor: '' },
     { id: 'IMPORT_DUTY', nombre: 'Impuesto interno', tipo: 'list', requerido: true, unidades: [], valor: '',
       opciones: ['0 %', '5 %', '10 %'].map((nombre, i) => ({ id: String(i), nombre })) }
@@ -1251,6 +1269,10 @@ async function apiDemo(ruta, cuerpo, metodo) {
   };
   if (ruta === '/api/categoria') return { categoria, atributos };
   if (ruta === '/api/revisar') {
+    // Igual que MercadoLibre: un número suelto en un dato con unidad se rechaza.
+    const sinUnidad = cuerpo.publicacion.atributos.filter(a => a.tipo === 'number_unit' && /^\d+([.,]\d+)?$/.test(String(a.valor || '').trim()));
+    if (sinUnidad.length) return { ok: false, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`),
+      errores: sinUnidad.map(a => `Attribute ${a.id} with value ${a.valor} is required and was omitted. The provided unit is not valid.`) };
     const falta = cuerpo.publicacion.atributos.filter(a => a.requerido && !a.valor).map(a => a.nombre);
     return falta.length
       ? { ok: false, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`), errores: [`Falta completar: ${falta.join(', ')}.`] }
@@ -1288,7 +1310,7 @@ if (DEMO) {
   document.title = 'VendeloYa (demo)';
   // Ganchos para probar sin manos (solo en el demo).
   window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista,
-    hacerOtraIgual, moverFoto, prolijar, redondear, actualizarRed, cierre };
+    hacerOtraIgual, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion };
 }
 dibujarFotos();
 refrescarCuenta();

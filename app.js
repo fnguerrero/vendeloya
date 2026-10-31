@@ -963,23 +963,40 @@ addEventListener('beforeunload', e => {
 
 /* ---------- historial ---------- */
 
-const ESTADOS = { borrador: 'Borrador', revisada: 'Revisada', publicada: 'Publicada' };
+const ESTADOS = {
+  borrador: 'Borrador', revisada: 'Revisada', publicada: 'Publicada',
+  // lo que dice MercadoLibre de una publicada, cuando llega el seguimiento
+  activa: 'Activa', pausada: 'Pausada', vendida: 'Vendida', finalizada: 'Finalizada', en_revision: 'En revisión'
+};
 const ocultos = new Set(); // borrados con "Deshacer" pendiente
 
-async function cargarHistorial() {
+async function cargarHistorial({ forzar = false } = {}) {
   if (!clave() && !DEMO) { dibujarHistorial([]); return; }
   try {
     const { registros } = await api('/api/registros');
     dibujarHistorial(registros);
+    await cargarSeguimiento(registros, forzar);
   } catch (e) {
     $('historial-vacio').textContent = `No se pudo traer el historial: ${e.message}`;
     $('historial-vacio').hidden = false;
   }
 }
 
+/** Estado real, visitas y preguntas de lo publicado. Si falla, el historial queda como estaba. */
+async function cargarSeguimiento(registros, forzar) {
+  if (!registros.some(r => r.estado === 'publicada')) { historialVista.seguimiento = {}; return; }
+  try {
+    const s = await api(`/api/seguimiento${forzar ? '?forzar=1' : ''}`);
+    historialVista.seguimiento = s.registros || {};
+    dibujarHistorial(historialVista.registros);
+  } catch (e) {
+    console.warn('seguimiento', e.message);
+  }
+}
+
 /* Filtro por estado y búsqueda por título: aparecen recién cuando la lista se alarga. */
 const MIN_FILTROS = 5;
-const historialVista = { registros: [], filtro: '', busqueda: '' };
+const historialVista = { registros: [], filtro: '', busqueda: '', seguimiento: {} };
 const sinAcentos = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const enFiltro = (r, f) => !f || (f === 'publicada' ? r.estado === 'publicada' : r.estado !== 'publicada');
 
@@ -1021,10 +1038,28 @@ function dibujarHistorial(registros) {
     t.textContent = r.titulo;
     const sub = document.createElement('span');
     sub.textContent = `${pesos(r.precio)} · ${fecha(r.actualizado || r.creado)}`;
+    const seg = r.estado === 'publicada' ? historialVista.seguimiento[r.id] : null;
+    const estadoChip = seg && ESTADOS[seg.estado] ? seg.estado : r.estado;
     const chip = document.createElement('span');
-    chip.className = `estado estado-${r.estado}`;
-    chip.textContent = ESTADOS[r.estado] || r.estado;
+    chip.className = `estado estado-${estadoChip}`;
+    chip.textContent = ESTADOS[estadoChip] || estadoChip;
     texto.append(t, sub);
+    if (seg) {
+      const partes = [];
+      if (seg.visitas != null) partes.push(`${seg.visitas} ${seg.visitas === 1 ? 'visita' : 'visitas'}`);
+      if (seg.vendidas) partes.push(`${seg.vendidas} ${seg.vendidas === 1 ? 'vendida' : 'vendidas'}`);
+      const linea = document.createElement('span');
+      linea.className = 'item-seguimiento';
+      linea.textContent = partes.join(' · ');
+      if (seg.preguntas) {
+        const q = document.createElement('b');
+        q.className = 'pregunta';
+        q.textContent = `${seg.preguntas} sin responder`;
+        q.title = seg.preguntas === 1 ? 'Una pregunta sin responder en MercadoLibre' : `${seg.preguntas} preguntas sin responder en MercadoLibre`;
+        linea.append(partes.length ? ' · ' : '', q);
+      }
+      if (linea.textContent) texto.append(linea);
+    }
     abrir.append(img, texto, chip);
 
     const borrar = document.createElement('button');
@@ -1111,7 +1146,7 @@ async function hacerOtraIgual(id) {
 }
 $('otra-igual').addEventListener('click', () => hacerOtraIgual(estado.registroId));
 
-$('refrescar-historial').addEventListener('click', cargarHistorial);
+$('refrescar-historial').addEventListener('click', () => cargarHistorial({ forzar: true }));
 
 function volverAlInicio() {
   clearTimeout(guardadoTimer);
@@ -1315,6 +1350,12 @@ async function apiDemo(ruta, cuerpo, metodo) {
   if (ruta === '/api/publicar') return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
 
   const regs = demoRegs();
+  if (ruta.startsWith('/api/seguimiento')) {
+    const pubs = Object.values(regs).filter(r => r.estado === 'publicada');
+    return { consultado: new Date().toISOString(), registros: Object.fromEntries(pubs.map((r, i) => [r.id,
+      i % 3 === 2 ? { estado: 'vendida', vendidas: 1, disponibles: 0, visitas: 40 + i * 7, preguntas: 0 }
+                  : { estado: 'activa', vendidas: 0, disponibles: 1, visitas: 12 + i * 7, preguntas: i === 0 ? 1 : 0 }])) };
+  }
   if (ruta === '/api/registros') {
     const lista = Object.values(regs).sort((a, b) => (b.actualizado || '').localeCompare(a.actualizado || ''));
     return { registros: lista.map(r => ({ id: r.id, creado: r.creado, actualizado: r.actualizado, estado: r.estado || 'borrador',

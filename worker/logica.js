@@ -186,8 +186,42 @@ export function resumenRegistro(reg) {
     precio: Number(p.precio || a.precio) || 0,
     estado: reg.estado || 'borrador',
     thumb: reg.thumb || '',
-    permalink: reg.ml?.permalink || ''
+    permalink: reg.ml?.permalink || '',
+    mlId: reg.ml?.id || null
   };
+}
+
+/* ---------- seguimiento de publicaciones ---------- */
+
+/** Estado legible de una publicación según lo que devuelve /items.
+ *  Una usada de una sola unidad, al venderse, queda closed o paused sin stock: las dos son "vendida". */
+export function estadoPublicacion(item) {
+  if (!item?.status) return 'desconocido';
+  const sub = item.sub_status || [];
+  const vendio = (item.sold_quantity || 0) > 0;
+  if (item.status === 'active') return sub.includes('under_review') ? 'en_revision' : 'activa';
+  if (item.status === 'paused') return vendio && sub.includes('out_of_stock') ? 'vendida' : 'pausada';
+  if (item.status === 'closed') return vendio ? 'vendida' : 'finalizada';
+  if (item.status === 'under_review') return 'en_revision';
+  return item.status;
+}
+
+/** Junta ítems, visitas y preguntas sin responder en un resumen por id de MercadoLibre. */
+export function armarSeguimiento(items, visitas = {}, preguntas = []) {
+  const porItem = {};
+  for (const it of items) {
+    if (!it?.id) continue;
+    porItem[it.id] = {
+      estado: estadoPublicacion(it),
+      vendidas: it.sold_quantity || 0,
+      disponibles: Number.isFinite(it.available_quantity) ? it.available_quantity : null,
+      precio: Number.isFinite(it.price) ? it.price : null,
+      visitas: Number.isFinite(visitas[it.id]) ? visitas[it.id] : null,
+      preguntas: 0
+    };
+  }
+  for (const q of preguntas) if (porItem[q?.item_id]) porItem[q.item_id].preguntas++;
+  return porItem;
 }
 
 /* El historial guarda hasta esta cantidad; los más viejos se caen de la lista (no del KV). */

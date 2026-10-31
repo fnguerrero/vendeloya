@@ -169,7 +169,11 @@ details.tarjeta summary { cursor: pointer; font-weight: 700; }
 .estado { flex: none; padding: 2px 8px; border-radius: 999px; font-size: .75rem; font-weight: 700; }
 .estado-borrador { background: var(--fondo); color: var(--suave); }
 .estado-revisada { background: var(--azul-claro); color: var(--azul); }
-.estado-publicada { background: var(--ok-fondo); color: var(--ok); }
+.estado-publicada, .estado-activa { background: var(--ok-fondo); color: var(--ok); }
+.estado-vendida { background: var(--azul); color: #fff; }
+.estado-pausada, .estado-finalizada { background: var(--fondo); color: var(--suave); }
+.estado-en_revision { background: var(--aviso-fondo); color: var(--texto); }
+.item-seguimiento .pregunta { color: var(--error); font-weight: 600; }
 .item-borrar {
   flex: none; width: 36px; height: 36px; margin-left: 4px; border: 0; border-radius: 50%;
   background: none; color: var(--suave); font-size: 1.2rem; cursor: pointer;

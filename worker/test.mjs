@@ -5,7 +5,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   elegirAtributos, atributoParaML, recortarTitulo, limpiarDescripcion,
-  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice, aplicarDefaults
+  armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice, aplicarDefaults,
+  estadoPublicacion, armarSeguimiento
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -159,9 +160,9 @@ test('armarItem: solo retiro en persona', () => {
 test('resumenRegistro: lo editado gana sobre la propuesta de la IA', () => {
   const reg = { id: 'abc12345', creado: 'c', actualizado: 'a', estado: 'publicada', thumb: 'data:x',
     analisis: { propuesta: { titulo: 'De la IA', precio: 100 } },
-    publicacion: { titulo: 'Editado', precio: '250' }, ml: { permalink: 'https://x' } };
+    publicacion: { titulo: 'Editado', precio: '250' }, ml: { id: 'MLA1', permalink: 'https://x' } };
   assert.deepEqual(resumenRegistro(reg), { id: 'abc12345', creado: 'c', actualizado: 'a', titulo: 'Editado',
-    precio: 250, estado: 'publicada', thumb: 'data:x', permalink: 'https://x' });
+    precio: 250, estado: 'publicada', thumb: 'data:x', permalink: 'https://x', mlId: 'MLA1' });
   const recien = resumenRegistro({ id: 'x', analisis: { propuesta: { titulo: 'De la IA', precio: 100 } } });
   assert.equal(recien.titulo, 'De la IA');
   assert.equal(recien.estado, 'borrador');
@@ -193,6 +194,25 @@ test('aplicarDefaults: Modelo NA, IVA Exento, impuesto interno 0 % y GTIN sin as
   assert.equal(aplicarDefaults([{ ...attrs[0], valor: 'KR504' }])[0].valor, 'KR504');
   // Con el GTIN vacío no frena: faltantes no lo cuenta.
   assert.deepEqual(faltantes({ ...base, atributos: aplicarDefaults(attrs).filter(a => a.id !== 'BRAND') }), []);
+});
+
+test('estadoPublicacion: una usada vendida queda closed o paused sin stock', () => {
+  assert.equal(estadoPublicacion({ status: 'active', sold_quantity: 0 }), 'activa');
+  assert.equal(estadoPublicacion({ status: 'active', sub_status: ['under_review'] }), 'en_revision');
+  assert.equal(estadoPublicacion({ status: 'paused', sold_quantity: 0 }), 'pausada');
+  assert.equal(estadoPublicacion({ status: 'paused', sold_quantity: 1, sub_status: ['out_of_stock'] }), 'vendida');
+  assert.equal(estadoPublicacion({ status: 'closed', sold_quantity: 1 }), 'vendida');
+  assert.equal(estadoPublicacion({ status: 'closed', sold_quantity: 0 }), 'finalizada');
+  assert.equal(estadoPublicacion(null), 'desconocido');
+});
+
+test('armarSeguimiento: cuenta preguntas por ítem y tolera visitas faltantes', () => {
+  const items = [{ id: 'MLA1', status: 'active', sold_quantity: 0, available_quantity: 1, price: 1500 },
+                 { id: 'MLA2', status: 'closed', sold_quantity: 1, available_quantity: 0, price: 800 }];
+  const s = armarSeguimiento(items, { MLA1: 23 }, [{ item_id: 'MLA1' }, { item_id: 'MLA1' }, { item_id: 'MLA9' }]);
+  assert.deepEqual(s.MLA1, { estado: 'activa', vendidas: 0, disponibles: 1, precio: 1500, visitas: 23, preguntas: 2 });
+  assert.deepEqual(s.MLA2, { estado: 'vendida', vendidas: 1, disponibles: 0, precio: 800, visitas: null, preguntas: 0 });
+  assert.deepEqual(armarSeguimiento([]), {});
 });
 
 console.log(`\n${n} tests en verde`);

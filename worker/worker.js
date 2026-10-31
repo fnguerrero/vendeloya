@@ -16,6 +16,7 @@
      POST /api/desconectar       borra el token de MercadoLibre (cerrar sesión)
      GET  /api/registros         historial (resúmenes)
      GET|PUT|DELETE /api/registros/<id>   un borrador o publicación guardada
+     GET  /api/seguimiento       estado, visitas y preguntas de lo publicado (?forzar=1 salta el caché)
 
    Todo /api/* pide el header x-clave = APP_SECRET. El Origin solo no
    alcanza: cualquiera lo falsifica con curl, y esta app publica en la
@@ -24,7 +25,7 @@
 
 import { identificar, completarAtributos } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, CONDICIONES } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, CONDICIONES } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -276,6 +277,51 @@ async function desconectar(env) {
   return { ok: true };
 }
 
+/* ---------- seguimiento ---------- */
+
+// MercadoLibre no cambia tan seguido y el historial se abre a cada rato: unos minutos de caché alcanzan.
+const SEGUIMIENTO_TTL = 300;
+const lotes = (arr, n) => Array.from({ length: Math.ceil(arr.length / n) }, (_, i) => arr.slice(i * n, i * n + n));
+
+/** Estado, visitas y preguntas sin responder de todo lo publicado, por id de registro.
+ *  Visitas y preguntas son extras: si fallan, el estado sale igual. */
+async function seguimiento(env, forzar = false) {
+  if (!forzar) {
+    const cache = await env.KV.get('seguimiento', 'json');
+    if (cache) return { ...cache, cache: true };
+  }
+  const pubs = await registros.publicadas(env);
+  const ids = pubs.map(p => p.mlId);
+  const consultado = new Date().toISOString();
+  if (!ids.length) return { registros: {}, consultado };
+
+  const items = [];
+  for (const lote of lotes(ids, 20)) {
+    const { datos } = await ml(env, `/items?ids=${lote.join(',')}&attributes=id,status,sub_status,sold_quantity,available_quantity,price`);
+    for (const r of datos || []) if (r.code === 200 && r.body) items.push(r.body);
+  }
+  const visitas = {};
+  try {
+    for (const lote of lotes(ids, 50)) {
+      const { datos } = await ml(env, `/visits/items?ids=${lote.join(',')}`);
+      Object.assign(visitas, datos || {});
+    }
+  } catch (e) { console.log('visitas', e.message); }
+  let preguntas = [];
+  try {
+    const { datos } = await ml(env, '/my/received_questions/search?status=UNANSWERED&limit=50&api_version=4');
+    preguntas = datos?.questions || [];
+  } catch (e) { console.log('preguntas', e.message); }
+
+  const porItem = armarSeguimiento(items, visitas, preguntas);
+  const resultado = {
+    registros: Object.fromEntries(pubs.filter(p => porItem[p.mlId]).map(p => [p.id, porItem[p.mlId]])),
+    consultado
+  };
+  await env.KV.put('seguimiento', JSON.stringify(resultado), { expirationTtl: SEGUIMIENTO_TTL });
+  return resultado;
+}
+
 async function estado(env) {
   const faltan = faltanSecretos(env);
   if (faltan.length) return { conectado: false, faltan };
@@ -423,6 +469,7 @@ export default {
 
     try {
       if (request.method === 'GET' && url.pathname === '/api/estado') return json(await estado(env), 200, origen);
+      if (request.method === 'GET' && url.pathname === '/api/seguimiento') return json(await seguimiento(env, url.searchParams.has('forzar')), 200, origen);
 
       if (Number(request.headers.get('content-length') || 0) > MAX_CUERPO) return json({ error: 'Las fotos pesan demasiado.' }, 413, origen);
 

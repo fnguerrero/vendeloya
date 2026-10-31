@@ -49,6 +49,21 @@ export async function guardar(env, id, cambios) {
   return { ok: true, id, actualizado: reg.actualizado };
 }
 
+/** Las publicadas con su id de MercadoLibre. Los índices viejos no lo traían:
+ *  se completa leyendo el registro una sola vez y se guarda en el índice. */
+export async function publicadas(env) {
+  const idx = await indice(env);
+  let cambio = false;
+  for (const r of idx) {
+    if (r.estado !== 'publicada' || r.mlId !== undefined) continue;
+    const reg = await env.KV.get(`reg:${r.id}`, 'json');
+    r.mlId = reg?.ml?.id || null;
+    cambio = true;
+  }
+  if (cambio) await env.KV.put('regs', JSON.stringify(idx));
+  return idx.filter(r => r.estado === 'publicada' && r.mlId).map(r => ({ id: r.id, mlId: r.mlId }));
+}
+
 export async function borrar(env, id) {
   validarId(id);
   await env.KV.delete(`reg:${id}`);

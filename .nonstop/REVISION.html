@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VendeloYa · ronda 5</title>
+<style>
+  :root { --fondo: #f4f4f4; --tarjeta: #fff; --texto: #222; --suave: #666; --borde: #e3e3e3; --azul: #3483fa; --ok: #00a650; --aviso: #c77c00; --error: #d23a4b; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --fondo: #121212; --tarjeta: #1e1e1e; --texto: #ececec; --suave: #a6a6a6; --borde: #2e2e2e; --ok: #3fd18a; --error: #ff7a87; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--fondo); color: var(--texto); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--suave); margin: 0 0 16px; }
+  section { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  .nums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .nums div { background: var(--fondo); border-radius: 8px; padding: 8px 4px; text-align: center; }
+  .nums strong { display: block; font-size: 1.4rem; color: var(--ok); }
+  .nums span { font-size: .75rem; color: var(--suave); }
+  ul { margin: 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  code { background: var(--fondo); padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+  .tag { display: inline-block; font-size: .72rem; font-weight: 700; padding: 1px 7px; border-radius: 999px; margin-right: 4px; }
+  .grande { background: #e3edfb; color: #2968c8; }
+  .desvio { background: #fff7d6; color: #8a5a00; }
+  .ojo { color: var(--error); font-weight: 600; }
+  @media (prefers-color-scheme: dark) { .grande { background: #1c2b44; color: #8ab4ff; } .desvio { background: #34301a; color: #ffd36a; } }
+  @media (max-width: 480px) { .nums { grid-template-columns: repeat(2, 1fr); } }
+</style>
+</head>
+<body>
+<main>
+  <h1>VendeloYa · ronda 5: 20 mejoras</h1>
+  <p class="sub">02/11/2026 · commit local, sin push ni deploy todavía</p>
+
+  <section>
+    <h2>Resultado</h2>
+    <div class="nums">
+      <div><strong>20</strong><span>mejoras hechas</span></div>
+      <div><strong>23</strong><span>tests en verde</span></div>
+      <div><strong>9 / 40</strong><span>iteraciones</span></div>
+      <div><strong>0</strong><span>bloqueadas</span></div>
+    </div>
+    <p style="margin:10px 0 0;color:var(--suave);font-size:.9rem">Cada mejora se probó en el demo con JS y capturas en compu y celu (375 px), consola limpia en todas las corridas.</p>
+  </section>
+
+  <section>
+    <h2>Las cinco grandes</h2>
+    <ul>
+      <li><span class="tag grande">Preguntas</span> tocás una publicada en el historial y abajo están las preguntas sin responder: <b>Sugerir respuesta</b> (Claude, usa tu nota privada) y <b>Enviar</b>.</li>
+      <li><span class="tag grande">Parecidos</span> bajo el rango de precio, los 5 artículos más cercanos al sugerido, con link.</li>
+      <li><span class="tag grande">Editar lo publicado</span> en el mismo panel: cambiar precio, Pausar / Reactivar y <b>Marcar vendida</b> (doble toque: cierra en MercadoLibre y no se reabre).</li>
+      <li><span class="tag grande">Mejorar con un toque</span> en el editor de fotos: luz, contraste, color y nitidez calculados de la foto; <b>👁 Antes</b> para comparar; la original queda guardada.</li>
+      <li><span class="tag grande">Totales</span> arriba del historial: activas, vendidas, $ vendido, visitas y preguntas sin responder.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Las quince chicas</h2>
+    <ul>
+      <li>Fechas relativas (hoy, ayer, hace N días) y filtro <b>Vendidas</b>.</li>
+      <li><b>Copiar link</b> y <b>WhatsApp</b> (título, precio y link) desde el panel de cada publicada.</li>
+      <li>Cuenta de fotos N/6 y aviso con menos de 3; aviso si ya tenés una publicada muy parecida.</li>
+      <li>El precio en palabras: por debajo / dentro / por encima de lo que se pide.</li>
+      <li>Chips <b>+ Marca</b> y <b>+ Modelo</b> si la IA los vio y faltan en el título; <b>+ Medidas</b> en la descripción.</li>
+      <li>Atajos: <code>Esc</code> vuelve, <code>/</code> busca en el historial, <code>Ctrl+S</code> guarda ya.</li>
+      <li>Publicada con la portada, el precio y "Ver en tus publicaciones".</li>
+      <li>Arrastrar fotos sobre cualquier parte de la página ("Soltá acá").</li>
+      <li>Configuración: tema claro / oscuro / como el sistema, y <b>Descargar mi historial (JSON)</b>.</li>
+      <li>"Actualizado hace N min" y el botón Actualizar girando.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Desvíos</h2>
+    <ul>
+      <li><span class="tag desvio">IA de fotos</span> Workers AI no tiene quita-fondo ni segmentación; lo único que edita imágenes es generativo y puede cambiar el producto. Se hizo <b>sin IA</b>, en el navegador.</li>
+      <li><span class="tag desvio">Publicar fijo en celu</span> ya existía desde la ronda 2: se reemplazó por WhatsApp.</li>
+      <li><span class="tag desvio">Copiar link</span> está en el panel de la publicación, no en cada fila.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Qué cambió y cómo deshacerlo</h2>
+    <ul>
+      <li>Worker: <code>worker.js</code>, <code>logica.js</code>, <code>ia.js</code>, <code>registros.js</code>, <code>test.mjs</code>. App: <code>app.js</code>, <code>editor.js</code>, <code>index.html</code>, <code>styles.css</code>, <code>sw.js</code> (VERSION 15).</li>
+      <li>Está en un commit local sobre <code>main</code>: para volver atrás, <code>git revert</code> de ese commit (o <code>git reset --hard HEAD~1</code> si no se pusheó).</li>
+      <li>La ronda anterior quedó en <code>.nonstop/ronda-3-uso-y-4-editor/</code>.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Lo que queda</h2>
+    <ul>
+      <li><span class="ojo">Push y deploy</span> de los dos Workers: esperan tu OK.</li>
+      <li>Probar con la cuenta real: responder una pregunta y cambiar un precio. En demo está simulado; en producción cada acción va a MercadoLibre.</li>
+      <li>Marcar vendida es irreversible: por eso pide doble toque.</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

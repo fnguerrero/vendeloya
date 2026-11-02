@@ -80,9 +80,11 @@ const fecha = iso => {
   if (!iso) return '';
   const d = new Date(iso);
   const hoy = new Date();
-  return d.toDateString() === hoy.toDateString()
-    ? `hoy ${d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}`
-    : d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
+  if (d.toDateString() === hoy.toDateString()) return `hoy ${d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}`;
+  const dias = Math.round((new Date(hoy).setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
+  if (dias === 1) return 'ayer';
+  if (dias > 1 && dias < 7) return `hace ${dias} días`;
+  return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' });
 };
 
 const nuevoId = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);
@@ -186,6 +188,48 @@ addEventListener('online', () => {
 
 /* Instalar la app (el navegador avisa cuando se puede). */
 let instalador = null;
+/** Todo el historial con sus registros completos (fotos incluidas), para el archivo de respaldo. */
+async function armarRespaldo() {
+  const { registros } = await api('/api/registros');
+  const completos = [];
+  for (const r of registros) {
+    try { completos.push(await api(`/api/registros/${r.id}`)); } catch { completos.push(r); }
+  }
+  return { app: 'VendeloYa', exportado: new Date().toISOString(), registros: completos };
+}
+$('exportar-historial').addEventListener('click', async () => {
+  const b = $('exportar-historial');
+  b.disabled = true;
+  b.textContent = 'Armando el archivo…';
+  try {
+    const datos = await armarRespaldo();
+    const url = URL.createObjectURL(new Blob([JSON.stringify(datos)], { type: 'application/json' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vendeloya-historial-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast(`Listo: ${datos.registros.length} registro${datos.registros.length === 1 ? '' : 's'} en el archivo.`);
+  } catch (e) {
+    toast(`No se pudo armar el respaldo: ${e.message}`);
+  }
+  b.disabled = false;
+  b.textContent = 'Descargar mi historial (JSON)';
+});
+
+/* ---------- tema ---------- */
+
+/** auto (como el sistema), claro u oscuro; se recuerda por dispositivo. */
+function aplicarTema(tema) {
+  const t = ['claro', 'oscuro'].includes(tema) ? tema : 'auto';
+  if (t === 'auto') delete document.documentElement.dataset.tema;
+  else document.documentElement.dataset.tema = t;
+  local('vendeloya.tema', t === 'auto' ? null : t);
+  for (const b of document.querySelectorAll('.filtro.tema')) b.classList.toggle('activo', b.dataset.tema === t);
+}
+for (const b of document.querySelectorAll('.filtro.tema')) b.addEventListener('click', () => aplicarTema(b.dataset.tema));
+aplicarTema(local('vendeloya.tema'));
+
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); instalador = e; $('instalar-app').hidden = false; });
 addEventListener('appinstalled', () => { instalador = null; $('instalar-app').hidden = true; toast('App instalada.'); });
 $('instalar-app').addEventListener('click', async () => {
@@ -453,6 +497,26 @@ $('paso-fotos').addEventListener('drop', e => {
   if (imagenes.length) agregarFotos(imagenes);
 });
 
+/* Arrastrar sobre cualquier parte de la página (inicio o revisión): un velo dice "Soltá acá". */
+const traeArchivos = e => [...(e.dataTransfer?.items || [])].some(i => i.kind === 'file');
+const sePuedenSoltar = () => (!$('paso-fotos').hidden || !$('paso-revision').hidden) && !document.querySelector('dialog[open]');
+document.addEventListener('dragover', e => {
+  if (!traeArchivos(e) || !sePuedenSoltar()) return;
+  e.preventDefault();
+  $('velo-arrastre').hidden = false;
+});
+document.addEventListener('dragleave', e => {
+  if (e.relatedTarget === null) $('velo-arrastre').hidden = true;   // salió de la ventana
+});
+document.addEventListener('drop', e => {
+  $('velo-arrastre').hidden = true;
+  if (e.defaultPrevented || !sePuedenSoltar()) return;   // la tarjeta de fotos ya lo tomó
+  e.preventDefault();
+  const imagenes = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith('image/'));
+  if (!imagenes.length) return;
+  agregarFotos(imagenes).then(() => { if (!$('paso-revision').hidden) fotosCambiaron(); });
+});
+
 /* En la compu: pegar con Ctrl+V una foto copiada (una captura, una imagen de otra página). */
 document.addEventListener('paste', e => {
   if ($('paso-fotos').hidden) return;
@@ -532,6 +596,8 @@ function mostrarRevision(r, guardada) {
   actualizarChecklist();
   marcarPropuesta();
   marcarProlijar();
+  marcarChips();
+  marcarMedidas();
   pintarCierre();
   pantalla('revision');
 }
@@ -553,6 +619,61 @@ function marcarProlijar() {
   const t = $('titulo').value;
   $('prolijar').hidden = !t.trim() || prolijar(t) === t.trim();
 }
+
+/* ---------- marca y modelo que faltan en el título ---------- */
+
+// "Black+Decker", "Black & Decker" y "black and decker" son lo mismo.
+const compacto = t => sinAcentos(t).replace(/[+&]/g, ' ').replace(/\b(and|y)\b/g, ' ').replace(/[^a-z0-9ñ]/g, '');
+const SIN_MARCA = /^(gen[eé]rica?|sin marca|no|ninguna?|n\/a|-)$/i;
+
+/** Lo que la IA vio (marca, modelo) y no está en el título: un toque lo agrega al final. */
+function marcarChips() {
+  const caja = $('titulo-chips');
+  const id = estado.analisis?.identificacion || {};
+  const titulo = compacto($('titulo').value);
+  const faltan = [...new Set([id.marca, id.modelo].map(v => String(v || '').trim())
+    .filter(v => v.length > 1 && !SIN_MARCA.test(v) && !titulo.includes(compacto(v))))];
+  caja.hidden = !faltan.length;
+  caja.replaceChildren(...faltan.map(v => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'filtro chip-titulo';
+    b.textContent = `+ ${v}`;
+    b.title = 'Agregar al título';
+    b.onclick = () => {
+      const max = estado.categoria?.maxTitulo || 60;
+      const nuevo = `${$('titulo').value.trim()} ${v}`.trim();
+      if (nuevo.length > max) { toast(`No entra: el título tiene un máximo de ${max} caracteres.`); return; }
+      $('titulo').value = nuevo;
+      $('titulo').dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    return b;
+  }));
+}
+
+/* ---------- medidas en la descripción ---------- */
+
+const MEDIDAS = [['HEIGHT', 'alto'], ['WIDTH', 'ancho'], ['LENGTH', 'largo'], ['DEPTH', 'profundidad'], ['DIAMETER', 'diámetro'], ['WEIGHT', 'peso']];
+
+/** Las medidas cargadas en los datos, en una línea para la descripción ('' si no hay). */
+function lineaMedidas() {
+  const valores = new Map([...$('paso-revision').querySelectorAll('[data-id]')].map(c => [c.dataset.id, c.value.trim()]));
+  const partes = [];
+  for (const [id, nombre] of MEDIDAS) {
+    const a = estado.atributos.find(x => x.id === id || x.id.endsWith(`_${id}`));
+    const v = a && valores.get(a.id);
+    if (v) partes.push(`${nombre} ${conUnidad(a, v)}`);
+  }
+  return partes.length ? `Medidas: ${partes.join(', ')}.` : '';
+}
+function marcarMedidas() {
+  $('agregar-medidas').hidden = !lineaMedidas() || /\bmedidas:/i.test($('descripcion').value);
+}
+$('agregar-medidas').addEventListener('click', () => {
+  const d = $('descripcion');
+  d.value = `${d.value.trimEnd()}\n\n${lineaMedidas()}`.trim();
+  d.dispatchEvent(new Event('input', { bubbles: true }));
+});
 $('prolijar').addEventListener('click', () => {
   $('titulo').value = prolijar($('titulo').value);
   $('titulo').dispatchEvent(new Event('input', { bubbles: true }));
@@ -584,6 +705,11 @@ function dibujarFotosRevision(vista = 0) {
     minis.push(mas);
   }
   $('fotos-revision').replaceChildren(...minis);
+  const cuenta = document.createElement('span');
+  cuenta.className = 'fotos-cuenta';
+  cuenta.textContent = `${estado.fotos.length}/${MAX_FOTOS}`;
+  cuenta.title = 'Fotos de la publicación';
+  $('fotos-revision').append(cuenta);
   elegirFoto(Math.max(0, Math.min(vista, estado.fotos.length - 1)));
 }
 
@@ -656,7 +782,26 @@ function dibujarPrecio(pr) {
   const botones = { min: `Mínimo ${pesos(pr.min)}`, sugerido: `Sugerido ${pesos(pr.valor)}`, max: `Máximo ${pesos(pr.max)}` };
   for (const b of document.querySelectorAll('.rango-btn')) b.textContent = botones[b.dataset.precio];
   $('precio-rango').hidden = !(pr.min > 0 && pr.max > pr.min);
+  dibujarParecidos(pr.parecidos || []);
   marcarPrecio();
+}
+
+/** Hasta 5 publicaciones parecidas (las más cercanas al sugerido) para comparar a ojo. */
+function dibujarParecidos(lista) {
+  $('parecidos').hidden = !lista.length;
+  $('parecidos-n').textContent = lista.length ? String(lista.length) : '';
+  $('parecidos-lista').replaceChildren(...lista.map(p => {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = p.permalink;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = p.titulo;
+    const precio = document.createElement('strong');
+    precio.textContent = pesos(p.precio);
+    li.append(a, precio);
+    return li;
+  }));
 }
 
 /** Ubica el precio actual en la barra de mínimo a máximo y marca el botón que coincide. */
@@ -669,6 +814,16 @@ function marcarPrecio() {
   $('rango-relleno').style.width = `${pct}%`;
   const valores = { min: pr.min, sugerido: pr.valor, max: pr.max };
   for (const b of document.querySelectorAll('.rango-btn')) b.classList.toggle('activo', valores[b.dataset.precio] === v);
+  // En palabras: dónde cae frente a lo que se pide en MercadoLibre.
+  const donde = v < pr.min ? 'bajo' : v > pr.max ? 'alto' : 'rango';
+  const pos = $('precio-posicion');
+  pos.hidden = !v;
+  pos.dataset.donde = donde;
+  pos.textContent = {
+    bajo: 'Por debajo de lo que se pide: se vende rápido, pero quizá regalado.',
+    rango: 'Dentro de lo que se pide por cosas parecidas.',
+    alto: 'Por encima de lo que se pide: puede tardar en venderse.'
+  }[donde];
 }
 
 for (const b of document.querySelectorAll('.rango-btn')) {
@@ -860,7 +1015,27 @@ function pendientes() {
   // Una descripción de una línea vende menos: se avisa, pero no frena.
   const largo = $('descripcion').value.trim().length;
   if (largo < DESCRIPCION_MINIMA) items.push({ ok: true, aviso: true, texto: `Descripción corta (${largo})`, el: $('descripcion') });
+  // Con menos de tres fotos se vende menos: aviso, no frena.
+  if (estado.fotos.length > 0 && estado.fotos.length < 3) items.push({ ok: true, aviso: true, texto: `Mejor 3 fotos o más (tenés ${estado.fotos.length})` });
+  // Una publicada muy parecida que sigue en venta: por si es la misma cosa dos veces.
+  const repetida = publicadaParecida(titulo);
+  if (repetida) items.push({ ok: true, aviso: true, texto: `Ya tenés publicada una muy parecida: ${repetida}` });
   return { items, pendientes: items.filter(i => !i.ok) };
+}
+
+/** Una publicada que sigue en venta, con casi las mismas palabras en el título, que no sea este registro. */
+function publicadaParecida(titulo) {
+  const palabras = t => new Set(sinAcentos(t).replace(/[^a-z0-9ñ ]/g, ' ').split(/\s+/).filter(p => p.length > 2));
+  const mias = palabras(titulo);
+  if (mias.size < 2) return '';
+  for (const r of historialVista.registros) {
+    if (r.estado !== 'publicada' || r.id === estado.registroId || vendidaSegunML(r)) continue;
+    const otras = palabras(r.titulo);
+    let comunes = 0;
+    for (const p of mias) if (otras.has(p)) comunes++;
+    if (comunes / Math.max(mias.size, otras.size) >= 0.7) return r.titulo;
+  }
+  return '';
 }
 
 const DESCRIPCION_MINIMA = 80;
@@ -902,6 +1077,8 @@ function tocado(e) {
   actualizarChecklist();
   marcarPropuesta();
   marcarProlijar();
+  marcarChips();
+  marcarMedidas();
   if (e?.target?.id === 'nota') $('grupo-nota').querySelector('small').textContent = e.target.value.trim() ? 'tiene una nota' : 'no se publica';
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
@@ -972,6 +1149,7 @@ const ocultos = new Set(); // borrados con "Deshacer" pendiente
 
 async function cargarHistorial({ forzar = false } = {}) {
   if (!clave() && !DEMO) { dibujarHistorial([]); return; }
+  $('refrescar-historial').classList.add('girando');
   try {
     const { registros } = await api('/api/registros');
     dibujarHistorial(registros);
@@ -979,8 +1157,20 @@ async function cargarHistorial({ forzar = false } = {}) {
   } catch (e) {
     $('historial-vacio').textContent = `No se pudo traer el historial: ${e.message}`;
     $('historial-vacio').hidden = false;
+  } finally {
+    $('refrescar-historial').classList.remove('girando');
   }
 }
+
+/** "actualizado hace N min" junto al botón; se refresca solo cada minuto. */
+function pintarActualizado() {
+  const c = historialVista.consultado;
+  const el = $('historial-actualizado');
+  if (!c) { el.textContent = ''; return; }
+  const min = Math.round((Date.now() - new Date(c)) / 60000);
+  el.textContent = min < 1 ? 'recién actualizado' : min < 60 ? `actualizado hace ${min} min` : `actualizado ${fecha(c)}`;
+}
+setInterval(pintarActualizado, 60000);
 
 /** Estado real, visitas y preguntas de lo publicado. Si falla, el historial queda como estaba. */
 async function cargarSeguimiento(registros, forzar) {
@@ -988,6 +1178,8 @@ async function cargarSeguimiento(registros, forzar) {
   try {
     const s = await api(`/api/seguimiento${forzar ? '?forzar=1' : ''}`);
     historialVista.seguimiento = s.registros || {};
+    historialVista.consultado = s.consultado || new Date().toISOString();
+    pintarActualizado();
     dibujarHistorial(historialVista.registros);
   } catch (e) {
     console.warn('seguimiento', e.message);
@@ -996,9 +1188,13 @@ async function cargarSeguimiento(registros, forzar) {
 
 /* Filtro por estado y búsqueda por título: aparecen recién cuando la lista se alarga. */
 const MIN_FILTROS = 5;
-const historialVista = { registros: [], filtro: '', busqueda: '', seguimiento: {} };
+const historialVista = { registros: [], filtro: '', busqueda: '', seguimiento: {}, consultado: null };
 const sinAcentos = t => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
-const enFiltro = (r, f) => !f || (f === 'publicada' ? r.estado === 'publicada' : r.estado !== 'publicada');
+// "Vendidas" sale del seguimiento (lo que dice MercadoLibre); "Publicadas" son las que siguen en venta.
+const vendidaSegunML = r => r.estado === 'publicada' && ['vendida', 'finalizada'].includes(historialVista.seguimiento[r.id]?.estado);
+const enFiltro = (r, f) => !f || (f === 'vendida' ? vendidaSegunML(r)
+  : f === 'publicada' ? r.estado === 'publicada' && !vendidaSegunML(r)
+  : r.estado !== 'publicada');
 
 for (const b of document.querySelectorAll('#historial-filtros .filtro')) {
   b.addEventListener('click', () => { historialVista.filtro = b.dataset.filtro; dibujarHistorial(historialVista.registros); });
@@ -1017,6 +1213,7 @@ function dibujarHistorial(registros) {
   }
   const buscado = sinAcentos(busqueda.trim());
   const visibles = todos.filter(r => enFiltro(r, filtro) && sinAcentos(r.titulo).includes(buscado));
+  pintarTotales(todos);
   $('historial-vacio').hidden = visibles.length > 0;
   $('historial-vacio').textContent = todos.length
     ? 'No hay nada con ese filtro.'
@@ -1024,10 +1221,12 @@ function dibujarHistorial(registros) {
   $('historial-lista').replaceChildren(...visibles.map(r => {
     const li = document.createElement('li');
     li.className = 'item';
-    const abrir = document.createElement(r.estado === 'publicada' && r.permalink ? 'a' : 'button');
+    const seg = r.estado === 'publicada' ? historialVista.seguimiento[r.id] : null;
+    const abrir = document.createElement('button');
     abrir.className = 'item-abrir';
-    if (abrir.tagName === 'A') { abrir.href = r.permalink; abrir.target = '_blank'; abrir.rel = 'noopener'; }
-    else { abrir.type = 'button'; abrir.onclick = () => abrirRegistro(r.id); }
+    abrir.type = 'button';
+    // Una publicada abre su panel (precio, estado, preguntas); lo demás abre el borrador.
+    abrir.onclick = () => (r.estado === 'publicada' ? abrirPublicacion(r) : abrirRegistro(r.id));
 
     const img = document.createElement('img');
     img.alt = '';
@@ -1037,8 +1236,7 @@ function dibujarHistorial(registros) {
     const t = document.createElement('strong');
     t.textContent = r.titulo;
     const sub = document.createElement('span');
-    sub.textContent = `${pesos(r.precio)} · ${fecha(r.actualizado || r.creado)}`;
-    const seg = r.estado === 'publicada' ? historialVista.seguimiento[r.id] : null;
+    sub.textContent = `${pesos(seg?.precio || r.precio)} · ${fecha(r.actualizado || r.creado)}`;
     const estadoChip = seg && ESTADOS[seg.estado] ? seg.estado : r.estado;
     const chip = document.createElement('span');
     chip.className = `estado estado-${estadoChip}`;
@@ -1081,6 +1279,28 @@ function dibujarHistorial(registros) {
     li.append(abrir, igual, borrar);
     return li;
   }));
+}
+
+/** Arriba del historial, lo que dice el seguimiento, sumado. Aparece recién cuando llegó. */
+function pintarTotales(registros) {
+  const seg = historialVista.seguimiento;
+  const pubs = registros.filter(r => r.estado === 'publicada' && seg[r.id]);
+  $('historial-totales').hidden = !pubs.length;
+  if (!pubs.length) return;
+  const t = { activas: 0, vendidas: 0, plata: 0, visitas: 0, preguntas: 0 };
+  for (const r of pubs) {
+    const s = seg[r.id];
+    if (s.estado === 'activa' || s.estado === 'en_revision') t.activas++;
+    if (s.estado === 'vendida') { t.vendidas++; t.plata += (s.precio || r.precio || 0) * (s.vendidas || 1); }
+    t.visitas += s.visitas || 0;
+    t.preguntas += s.preguntas || 0;
+  }
+  $('total-activas').textContent = t.activas;
+  $('total-vendidas').textContent = t.vendidas;
+  $('total-plata').textContent = pesos(t.plata);
+  $('total-visitas').textContent = t.visitas;
+  $('total-preguntas').textContent = t.preguntas;
+  $('total-preguntas-caja').classList.toggle('alerta', t.preguntas > 0);
 }
 
 /** Borrado chico: desaparece ya, y se borra de verdad si no se toca "Deshacer". */
@@ -1165,6 +1385,172 @@ function volverAlInicio() {
 }
 $('volver').addEventListener('click', volverAlInicio);
 $('otra').addEventListener('click', volverAlInicio);
+$('listo-historial').addEventListener('click', () => {
+  volverAlInicio();
+  $('historial').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+/* ---------- una publicación: precio, estado y preguntas ---------- */
+
+const pub = { reg: null, seg: null, preguntas: [] };
+
+async function abrirPublicacion(r) {
+  pub.reg = r;
+  pub.seg = historialVista.seguimiento[r.id] || null;
+  $('pub-titulo').textContent = r.titulo;
+  $('pub-ver').href = r.permalink || '#';
+  $('pub-ver').hidden = !r.permalink;
+  $('pub-copiar').hidden = !r.permalink;
+  $('pub-precio').value = miles(pub.seg?.precio || r.precio);
+  pintarPublicacion();
+  $('pub').showModal();
+  await cargarPreguntasDe(r.id);
+}
+
+function pintarPublicacion() {
+  const s = pub.seg;
+  const est = s?.estado || 'publicada';
+  $('pub-resumen').textContent = [
+    ESTADOS[est] || est,
+    s?.visitas != null ? `${s.visitas} ${s.visitas === 1 ? 'visita' : 'visitas'}` : '',
+    s?.vendidas ? `${s.vendidas} ${s.vendidas === 1 ? 'vendida' : 'vendidas'}` : ''
+  ].filter(Boolean).join(' · ');
+  const cerrada = est === 'vendida' || est === 'finalizada';
+  $('pub-pausar').hidden = !(est === 'activa' || est === 'publicada' || est === 'en_revision');
+  $('pub-reactivar').hidden = est !== 'pausada';
+  $('pub-vendida').hidden = cerrada;
+  $('pub-cerrada').hidden = !cerrada;
+  $('pub-precio').disabled = cerrada;
+  $('pub-precio-guardar').disabled = cerrada;
+}
+
+/** Precio, pausar, reactivar o vendida: va a MercadoLibre y se refleja en el historial sin recargar. */
+async function accionPublicacion(accion, precio) {
+  const r = pub.reg;
+  const mlId = pub.seg?.mlId || r.mlId;
+  if (!mlId) { toast('Esta publicación no tiene id de MercadoLibre guardado. Tocá Actualizar y probá de nuevo.'); return; }
+  const botones = $('pub').querySelectorAll('button');
+  botones.forEach(b => { b.disabled = true; });
+  try {
+    const res = await api(`/api/publicaciones/${mlId}`, { accion, precio });
+    pub.seg = { ...(pub.seg || {}), mlId, estado: res.estado, precio: res.precio ?? pub.seg?.precio ?? null };
+    historialVista.seguimiento[r.id] = pub.seg;
+    pintarPublicacion();
+    dibujarHistorial(historialVista.registros);
+    toast({ precio: 'Precio cambiado.', pausar: 'Publicación pausada.', reactivar: 'Publicación activa de nuevo.', vendida: 'Marcada como vendida: la publicación quedó cerrada.' }[accion]);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    botones.forEach(b => { b.disabled = false; });
+    pintarPublicacion();
+  }
+}
+
+async function cargarPreguntasDe(registroId) {
+  $('pub-preguntas').replaceChildren();
+  $('pub-preguntas-vacio').hidden = true;
+  $('pub-preguntas-cargando').hidden = false;
+  try {
+    const { preguntas } = await api('/api/preguntas');
+    pub.preguntas = preguntas.filter(q => q.registroId === registroId);
+  } catch (e) {
+    pub.preguntas = [];
+    toast(`No se pudieron traer las preguntas: ${e.message}`);
+  }
+  $('pub-preguntas-cargando').hidden = true;
+  dibujarPreguntas();
+}
+
+function dibujarPreguntas() {
+  const lista = pub.preguntas;
+  $('pub-preguntas-vacio').hidden = lista.length > 0;
+  $('pub-preguntas').replaceChildren(...lista.map(q => {
+    const li = document.createElement('li');
+    const texto = document.createElement('p');
+    texto.className = 'pregunta-texto';
+    texto.textContent = q.texto;
+    const cuando = document.createElement('small');
+    cuando.textContent = fecha(q.fecha);
+    const ta = document.createElement('textarea');
+    ta.rows = 3;
+    ta.placeholder = 'Tu respuesta (sin links ni teléfonos: MercadoLibre los rechaza)';
+    ta.setAttribute('aria-label', `Respuesta a: ${q.texto}`);
+    const fila = document.createElement('div');
+    fila.className = 'fila';
+    const sugerir = document.createElement('button');
+    sugerir.type = 'button';
+    sugerir.className = 'boton secundario';
+    sugerir.textContent = '✨ Sugerir respuesta';
+    sugerir.onclick = async () => {
+      sugerir.disabled = true;
+      sugerir.textContent = 'Pensando…';
+      try {
+        const r = await api(`/api/preguntas/${q.id}/borrador`, { registroId: q.registroId, pregunta: q.texto });
+        ta.value = r.texto;
+        ta.focus();
+      } catch (e) { toast(e.message); }
+      sugerir.disabled = false;
+      sugerir.textContent = '✨ Sugerir respuesta';
+    };
+    const enviar = document.createElement('button');
+    enviar.type = 'button';
+    enviar.className = 'boton principal';
+    enviar.textContent = 'Enviar';
+    enviar.onclick = async () => {
+      const t = ta.value.trim();
+      if (!t) { ta.focus(); return; }
+      enviar.disabled = true;
+      try {
+        await api(`/api/preguntas/${q.id}/responder`, { texto: t });
+        pub.preguntas = pub.preguntas.filter(x => x.id !== q.id);
+        if (pub.seg) { pub.seg.preguntas = Math.max(0, (pub.seg.preguntas || 0) - 1); dibujarHistorial(historialVista.registros); }
+        dibujarPreguntas();
+        toast('Respuesta enviada.');
+      } catch (e) {
+        toast(e.message);
+        enviar.disabled = false;
+      }
+    };
+    fila.append(sugerir, enviar);
+    li.append(texto, cuando, ta, fila);
+    return li;
+  }));
+}
+
+$('pub-cerrar').addEventListener('click', () => $('pub').close());
+$('pub-copiar').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(pub.reg?.permalink || ''); toast('Link copiado.'); }
+  catch { toast('No se pudo copiar. Mantené apretado el link para copiarlo.'); }
+});
+$('pub-whatsapp').addEventListener('click', async () => {
+  const r = pub.reg;
+  const texto = `Vendo: ${r.titulo} · ${pesos(pub.seg?.precio || r.precio)}\n${r.permalink || ''}`.trim();
+  if (navigator.share) {
+    try { await navigator.share({ text: texto }); return; } catch { /* canceló: va por WhatsApp web */ }
+  }
+  open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank', 'noopener');
+});
+$('pub-precio').addEventListener('input', e => { e.target.value = miles(String(e.target.value).replace(/\D/g, '')); });
+$('pub-precio-guardar').addEventListener('click', () => {
+  const v = Number(String($('pub-precio').value).replace(/\D/g, ''));
+  if (!v) { $('pub-precio').focus(); return; }
+  accionPublicacion('precio', v);
+});
+$('pub-pausar').addEventListener('click', () => accionPublicacion('pausar'));
+$('pub-reactivar').addEventListener('click', () => accionPublicacion('reactivar'));
+/* Vendida cierra la publicación para siempre: se confirma tocando dos veces seguidas. */
+let vendidaArmada = 0;
+$('pub-vendida').addEventListener('click', () => {
+  if (Date.now() - vendidaArmada < 6000) {
+    vendidaArmada = 0;
+    $('pub-vendida').textContent = 'Marcar vendida';
+    accionPublicacion('vendida');
+    return;
+  }
+  vendidaArmada = Date.now();
+  $('pub-vendida').textContent = '¿Seguro? Tocá otra vez para cerrarla';
+  setTimeout(() => { if (vendidaArmada) { vendidaArmada = 0; $('pub-vendida').textContent = 'Marcar vendida'; } }, 6000);
+});
 
 /* ---------- revisar y publicar ---------- */
 
@@ -1245,6 +1631,10 @@ $('confirmar-no').addEventListener('click', () => $('confirmar').close());
 
 function mostrarListo(ml, aviso) {
   $('listo-texto').textContent = `Quedó publicada${ml.id ? ` (${ml.id})` : ''}.${aviso ? ' ' + aviso : ''}`;
+  const portada = estado.fotos[0]?.dataUrl || '';
+  $('listo-foto').src = portada;
+  $('listo-foto').hidden = !portada;
+  $('listo-precio').textContent = precioActual() ? pesos(precioActual()) : '';
   $('listo-link').href = ml.permalink || '#';
   $('listo-link').hidden = !ml.permalink;
   $('listo-compartir').hidden = !ml.permalink;
@@ -1267,9 +1657,28 @@ $('copiar-link').addEventListener('click', async () => {
 });
 
 /* Ctrl+Enter (Cmd+Enter en Mac) publica desde cualquier campo de la revisión: es el mismo botón. */
+/* Atajos: Esc vuelve al inicio, "/" busca en el historial, Ctrl+S guarda ya, Ctrl+Enter publica. */
 document.addEventListener('keydown', e => {
+  const dialogo = document.querySelector('dialog[open]');
+  const escribiendo = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '');
+  if (e.key === 'Escape' && !dialogo && (!$('paso-revision').hidden || !$('paso-listo').hidden)) {
+    e.preventDefault();
+    volverAlInicio();
+    return;
+  }
+  if (e.key === '/' && !dialogo && !escribiendo && !$('historial').hidden && !$('historial-filtros').hidden) {
+    e.preventDefault();
+    $('historial-buscar').focus();
+    return;
+  }
+  if ((e.key === 's' || e.key === 'S') && (e.ctrlKey || e.metaKey) && !dialogo && !$('paso-revision').hidden) {
+    e.preventDefault();
+    clearTimeout(guardadoTimer);
+    guardar().then(() => toast('Borrador guardado.'));
+    return;
+  }
   if (e.key !== 'Enter' || !(e.ctrlKey || e.metaKey)) return;
-  if ($('paso-revision').hidden || document.querySelector('dialog[open]') || !$('espera').hidden) return;
+  if ($('paso-revision').hidden || dialogo || !$('espera').hidden) return;
   e.preventDefault();
   $('publicar').click();
 });
@@ -1300,6 +1709,26 @@ function demoRegs(nuevo) {
   } catch { return {}; }
 }
 
+/* Preguntas y acciones del demo (responder, pausar, cambiar precio): también en
+   sessionStorage, para que se noten al volver. Las preguntas se inventan la primera
+   vez sobre las dos primeras publicadas. */
+function demoExtra(regs, nuevo) {
+  try {
+    if (nuevo) sessionStorage.setItem('vendeloya.demo.extra', JSON.stringify(nuevo));
+    const extra = JSON.parse(sessionStorage.getItem('vendeloya.demo.extra') || 'null') || { preguntas: null, acciones: {} };
+    if (!extra.preguntas) {
+      const pubs = Object.values(regs).filter(r => r.estado === 'publicada');
+      const hace = h => new Date(Date.now() - h * 3600e3).toISOString();
+      extra.preguntas = pubs.slice(0, 2).flatMap((r, i) => i === 0
+        ? [{ id: `${r.id}-q1`, registroId: r.id, mlId: r.ml?.id, texto: 'Hola, ¿cuánto mide de alto? ¿Hacés envíos a Morón?', fecha: hace(5) },
+           { id: `${r.id}-q2`, registroId: r.id, mlId: r.ml?.id, texto: '¿Tiene algún detalle o rayón?', fecha: hace(26) }]
+        : [{ id: `${r.id}-q1`, registroId: r.id, mlId: r.ml?.id, texto: '¿Es el precio final o se puede mejorar?', fecha: hace(2) }]);
+      if (pubs.length) sessionStorage.setItem('vendeloya.demo.extra', JSON.stringify(extra));
+    }
+    return extra;
+  } catch { return { preguntas: [], acciones: {} }; }
+}
+
 async function apiDemo(ruta, cuerpo, metodo) {
   await new Promise(r => setTimeout(r, 400));
   const nombre = metodo === 'PUT' ? 'guardar' : ruta.split('/')[2];
@@ -1325,11 +1754,17 @@ async function apiDemo(ruta, cuerpo, metodo) {
   atributos.push({ id: 'VALUE_ADDED_TAX', nombre: 'IVA', tipo: 'list', requerido: true, unidades: [], valor: 'Exento',
     opciones: ['Exento', '0 %', '10.5 %', '21 %', '27 %'].map((nombre, i) => ({ id: String(i), nombre })) });
   if (ruta === '/api/analizar') return {
-    identificacion: { producto: 'Taladro percutor eléctrico', estado_detalle: 'Uso visible en el mandril, carcasa sana. Se ve el cable entero y el selector de velocidad funciona según la foto.',
+    identificacion: { producto: 'Taladro percutor eléctrico', marca: 'Black+Decker', modelo: '', estado_detalle: 'Uso visible en el mandril, carcasa sana. Se ve el cable entero y el selector de velocidad funciona según la foto.',
       advertencias: ['No se ve el modelo: buscalo en la etiqueta de abajo.', 'Sacá una foto del enchufe y del cable completo.', 'Aclarar si incluye mechas o maletín.'], confianza: 'media' },
     categorias: [{ id: 'MLA5232', nombre: 'Taladros eléctricos › De Mano' }, { id: 'MLA1', nombre: 'Herramientas › Otros' }],
     categoria, atributos,
-    precio: { valor: 45000, fuente: 'ia', min: 38000, max: 52000, motivo: 'modo demo' },
+    precio: { valor: 45000, fuente: 'mercadolibre', min: 38000, max: 52000, muestras: 12, parecidos: [
+      { titulo: 'Taladro Percutor Black Decker 500w Usado', precio: 44000, permalink: 'https://www.mercadolibre.com.ar', thumb: '' },
+      { titulo: 'Taladro Black+decker Tm500 500w Con Maletín', precio: 47500, permalink: 'https://www.mercadolibre.com.ar', thumb: '' },
+      { titulo: 'Taladro Percutor 500w Black And Decker', precio: 41000, permalink: 'https://www.mercadolibre.com.ar', thumb: '' },
+      { titulo: 'Taladro Black Decker 13mm 500w', precio: 50000, permalink: 'https://www.mercadolibre.com.ar', thumb: '' },
+      { titulo: 'Taladro Percutor Bd 500w Impecable', precio: 39000, permalink: 'https://www.mercadolibre.com.ar', thumb: '' }
+    ] },
     userProducts: true,
     propuesta: { titulo: 'Taladro Percutor Black And Decker 500w', condicion: 'usado',
       descripcion: 'Taladro percutor Black+Decker de 500 W.\nUsado, funciona perfecto.\nIncluye solo el taladro.',
@@ -1350,12 +1785,37 @@ async function apiDemo(ruta, cuerpo, metodo) {
   if (ruta === '/api/publicar') return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
 
   const regs = demoRegs();
+  const extra = demoExtra(regs);
   if (ruta.startsWith('/api/seguimiento')) {
     const pubs = Object.values(regs).filter(r => r.estado === 'publicada');
-    return { consultado: new Date().toISOString(), registros: Object.fromEntries(pubs.map((r, i) => [r.id,
-      i % 3 === 2 ? { estado: 'vendida', vendidas: 1, disponibles: 0, visitas: 40 + i * 7, preguntas: 0 }
-                  : { estado: 'activa', vendidas: 0, disponibles: 1, visitas: 12 + i * 7, preguntas: i === 0 ? 1 : 0 }])) };
+    return { consultado: new Date().toISOString(), registros: Object.fromEntries(pubs.map((r, i) => {
+      const base = i % 3 === 2 ? { estado: 'vendida', vendidas: 1, disponibles: 0, visitas: 40 + i * 7 }
+                               : { estado: 'activa', vendidas: 0, disponibles: 1, visitas: 12 + i * 7 };
+      const a = extra.acciones[r.ml?.id] || {};
+      return [r.id, { ...base, ...(a.estado ? { estado: a.estado } : {}), precio: a.precio ?? null, mlId: r.ml?.id,
+        preguntas: extra.preguntas.filter(q => q.registroId === r.id).length }];
+    })) };
   }
+  if (ruta === '/api/preguntas') {
+    return { preguntas: extra.preguntas.map(q => ({ ...q, titulo: regs[q.registroId]?.publicacion?.titulo || 'Publicación' })) };
+  }
+  const mp = /^\/api\/preguntas\/([^/]+)\/(borrador|responder)$/.exec(ruta);
+  if (mp) {
+    if (mp[2] === 'borrador') return { texto: 'Hola! Mide 180 cm de alto por 90 de ancho. Solo retiro por Caseros, no hago envíos. Cualquier otra duda, preguntame.' };
+    extra.preguntas = extra.preguntas.filter(q => q.id !== mp[1]);
+    demoExtra(regs, extra);
+    return { ok: true };
+  }
+  const ma = /^\/api\/publicaciones\/(.+)$/.exec(ruta);
+  if (ma) {
+    const a = extra.acciones[ma[1]] || {};
+    if (cuerpo.accion === 'precio') a.precio = Number(cuerpo.precio);
+    else a.estado = { pausar: 'pausada', reactivar: 'activa', vendida: 'vendida' }[cuerpo.accion] || a.estado;
+    extra.acciones[ma[1]] = a;
+    demoExtra(regs, extra);
+    return { estado: a.estado || 'activa', precio: a.precio ?? null };
+  }
+  if (ruta === '/api/foto/mejorar') return { foto: cuerpo.foto, cambio: 'demo' };
   if (ruta === '/api/registros') {
     const lista = Object.values(regs).sort((a, b) => (b.actualizado || '').localeCompare(a.actualizado || ''));
     return { registros: lista.map(r => ({ id: r.id, creado: r.creado, actualizado: r.actualizado, estado: r.estado || 'borrador',
@@ -1383,7 +1843,7 @@ async function apiDemo(ruta, cuerpo, metodo) {
 if (DEMO) {
   document.title = 'VendeloYa (demo)';
   // Ganchos para probar sin manos (solo en el demo).
-  window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista,
+  window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista, api, cargarHistorial, fotosCambiaron, lineaMedidas, armarRespaldo, aplicarTema,
     hacerOtraIgual, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion };
 }
 dibujarFotos();

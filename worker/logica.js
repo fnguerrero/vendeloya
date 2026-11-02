@@ -224,6 +224,39 @@ export function armarSeguimiento(items, visitas = {}, preguntas = []) {
   return porItem;
 }
 
+/* ---------- acciones sobre una publicación ---------- */
+
+const err400 = m => Object.assign(new Error(m), { status: 400 });
+
+/** Cuerpo del PUT /items/{id} para cada acción de la app. */
+export function cambioPublicacion(accion, precio) {
+  if (accion === 'precio') {
+    const p = Math.round(Number(precio));
+    if (!Number.isFinite(p) || p <= 0) throw err400('El precio tiene que ser un número mayor a cero.');
+    return { price: p };
+  }
+  const estados = { pausar: 'paused', reactivar: 'active', vendida: 'closed' };
+  if (!estados[accion]) throw err400('Acción desconocida.');
+  return { status: estados[accion] };
+}
+
+/** La respuesta a una pregunta: texto plano, hasta 2000 caracteres, sin links, mails ni teléfonos (MercadoLibre los rechaza). */
+export function validarRespuesta(texto) {
+  const t = String(texto || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  if (t.length < 2) throw err400('Escribí la respuesta.');
+  if (/https?:\/\/|www\.|@|\d[\d .-]{7,}\d/i.test(t)) throw err400('MercadoLibre no deja links, mails ni teléfonos en las respuestas.');
+  return t.slice(0, 2000);
+}
+
+/** Los parecidos más cercanos al precio sugerido, para comparar a ojo. */
+export function elegirParecidos(resultados, sugerido, n = 5) {
+  return (resultados || [])
+    .filter(r => r?.title && Number(r.price) > 0 && r.permalink)
+    .sort((a, b) => Math.abs(a.price - sugerido) - Math.abs(b.price - sugerido))
+    .slice(0, n)
+    .map(r => ({ titulo: r.title, precio: Number(r.price), permalink: r.permalink, thumb: r.thumbnail || '' }));
+}
+
 /* El historial guarda hasta esta cantidad; los más viejos se caen de la lista (no del KV). */
 export const MAX_HISTORIAL = 200;
 

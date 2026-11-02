@@ -1,36 +1,51 @@
-# SPEC — ronda 3: 10 mejoras de uso de VendeloYa
+# SPEC — ronda 5: 20 mejoras (5 grandes + 15 chicas)
 
 ## Objetivo
-Otras diez mejoras de uso, solo en el front: publicar más rápido cosas parecidas (duplicar, cierre de descripción), ordenar las fotos con el mouse, cuidar el precio y el título, y que la app avise cuando no hay conexión, cuenta o algo que instalar. Rondas anteriores: `ronda-1-esteticas/` y `ronda-2-uso/`.
+Que VendeloYa sirva también después del botón Publicar: ver y responder preguntas, retocar precio o pausar sin entrar a MercadoLibre, comparar con artículos parecidos, mejorar la foto con un toque, y un panel de totales. Más quince mejoras de uso chicas en el historial, la revisión y la configuración. Rondas anteriores en `ronda-1-esteticas/`, `ronda-2-uso/` y `ronda-3-uso-y-4-editor/`; el seguimiento del historial (estado, visitas, preguntas) se hizo el 31/10 fuera de nonstop (commit 40618b2).
 
 ## Alcance
-Entra: `index.html`, `styles.css`, `app.js` y el modo demo, que se puede ampliar para verificar.
-No entra: el Worker (`worker/`) ni el flujo con MercadoLibre. No se despliega ni se commitea sin el OK de Nico. La paleta y el logo no se tocan.
+Entra: `worker/` (rutas nuevas, lógica pura en `logica.js` con tests), `index.html`, `styles.css`, `app.js`, `editor.js`, `sw.js` y el modo demo (`?demo`), que se amplía para poder verificar sin la cuenta real.
+No entra: publicar nada nuevo en MercadoLibre (pedido explícito de la sesión Emprendimientos), tocar la paleta o el logo, dependencias nuevas. Commit sí (CLAUDE.md: no pide confirmación); **push y deploy solo con el OK de Nico al final**.
 
 ## Stack y decisiones
-- Vanilla JS + CSS, sin dependencias.
-- Verificación en el preview local (`py -3 -m http.server`, puerto propio, `?demo=1`) con JS (estado, DOM, eventos simulados) y capturas en 1440×800 y 375×812.
-- La versión de caché (`?v=` y `VERSION` del service worker) sube una sola vez, al final.
+- Vanilla JS + CSS, sin dependencias. Lógica nueva del Worker en `logica.js` (pura, testeable con `node test.mjs`).
+- Acciones sobre publicaciones vía la API de MercadoLibre: `PUT /items/{id}` (price, status), `POST /answers` (responder), `GET /my/received_questions/search` (preguntas).
+- IA para fotos con Workers AI (binding `AI` en `wrangler.toml`, cuota gratis 10.000 neurons/día). Nunca automática: botón "Mejorar con IA", antes/después, y la original queda guardada (ya lo hace el editor).
+- Borrador de respuesta a preguntas con Claude (`ia.js`), a partir de título, descripción, nota privada y la pregunta. Nico siempre aprueba antes de enviar.
+- Verificación: `node test.mjs`, `node --check`, y el demo en el preview local (puerto 5610 si sigue vivo, si no `py -3 -m http.server 5611`) con JS (DOM, eventos simulados) y capturas en escritorio y 375×812.
+- `?v=` de app.js/styles.css y `VERSION` del service worker suben una sola vez, al final.
 
 ## Supuestos
-- "43,5 mejoras" era un error de tipeo: Nico confirmó **10** y de **uso** en la ventana de preguntas.
-- La nota privada vive dentro de `publicacion.nota`: el Worker arma el ítem de MercadoLibre solo con los campos que conoce (`armarItem`), así que no se publica. Se verifica que `leerPublicacion` la incluya y que el borrador la guarde.
-- "Hacer otra igual" copia análisis, publicación y fotos a un registro nuevo en borrador, sin los ids de foto de MercadoLibre (así se vuelven a subir) y sin el link de la publicación.
-- El cierre de la descripción se guarda en el navegador (localStorage), por dispositivo.
-- "Prolijar" el título saca emojis, espacios dobles y signos repetidos, y pasa a mayúsculas y minúsculas lo que está todo en mayúsculas.
+- "Fondo limpio" depende de que Workers AI tenga un modelo de segmentación o quita-fondo. Si no lo hay, la mejora con IA pasa a ser **recorte automático al producto** (detección de objetos `@cf/facebook/detr-resnet-50`) + auto-niveles en canvas, con el mismo botón y antes/después. Se decide al llegar al ítem mirando `npx wrangler ai models`.
+- **Decidido en la iteración 4:** `wrangler ai models` no tiene ningún modelo de segmentación ni quita-fondo; lo único que edita imágenes es FLUX.2 klein (generativo), que puede cambiar el producto y para una venta eso es engañar al comprador. Así que "Mejorar con IA" pasa a ser **"Mejorar con un toque"** en el cliente: auto-niveles, balance de blancos y nitidez suave en canvas, con antes/después y la original guardada. Sin Worker ni binding AI. Es un desvío de la SPEC y va al informe.
+- "Borradores en la nube" ya existe (los registros viven en KV): la quinta grande pasa a ser el **panel de totales** del historial.
+- "Sugerencia de precio" ya existe como rango de mercado: la grande es mostrar los **parecidos** (título, precio, link) que ese rango usa, para comparar a ojo.
+- Marcar vendida = cerrar la publicación en MercadoLibre (`status: closed`), irreversible: pide confirmación en la app.
+- Las respuestas a preguntas se envían solo al tocar "Enviar"; el borrador de la IA es editable.
+- En demo, preguntas, parecidos, acciones e IA se simulan en `apiDemo` con datos fijos.
 
 ## Criterios de aceptación
-1. En el historial, "Hacer otra igual" crea un borrador nuevo con las mismas fotos y datos, sin id de MercadoLibre ni link, y lo abre.
-2. Las miniaturas del inicio se reordenan arrastrando y la primera es la portada.
-3. En Configuración se puede guardar un cierre de descripción y un botón lo agrega al final de la descripción (una sola vez).
-4. Una nota privada se guarda con el borrador y no aparece en el ítem que arma el Worker.
-5. Botones de precio −5 %, +5 % y Redondear dejan el precio como número válido y actualizan la barra.
-6. "Prolijar" aparece solo si el título cambia y lo deja bien.
-7. Sin conexión, la app muestra un aviso arriba y bloquea Armar y Publicar. Al volver, lo saca.
-8. Con la cuenta sin conectar (y no demo), el inicio muestra un aviso con botón a Configuración.
-9. En Configuración hay "Instalar app" cuando el navegador lo permite.
-10. Descripción corta: aviso en el checklist que no frena, con contador de caracteres.
-11. Sin errores en consola en demo, sin scroll horizontal en celu, revisión en 1440×800 sin scroll de página, y los 18 tests del Worker en verde.
+1. Preguntas: desde el historial se abren las preguntas sin responder de una publicación, se puede pedir un borrador a la IA, editarlo y enviarlo; la enviada desaparece de la lista.
+2. Parecidos: en la revisión, debajo del rango de precio, se ven hasta 5 artículos parecidos con precio y link (o nada, sin error, si MercadoLibre no los da).
+3. Editar lo publicado: desde el historial, una publicada permite cambiar el precio, pausar/reactivar y marcar vendida (con confirmación); el chip y el seguimiento se actualizan.
+4. Mejorar con IA: en el editor hay un botón que mejora la foto (fondo o recorte automático según el modelo disponible), muestra antes/después y permite descartar; la original sigue disponible.
+5. Totales: arriba del historial, activas, vendidas, $ vendido, visitas y preguntas sin responder, calculados del seguimiento.
+6. Fechas relativas en el historial (hoy, ayer, hace N días, luego dd/mm).
+7. Filtro "Vendidas" en el historial, con su cuenta.
+8. Copiar link de cada publicada desde el historial, con toast.
+9. Contador de fotos en la revisión y aviso (no bloqueante) con menos de 3 fotos.
+10. Texto de posición del precio frente al mercado (por debajo / dentro / por encima).
+11. Chips para sumar al título la marca o el modelo que la IA vio y faltan.
+12. Botón "+ Medidas" en la descripción que inserta alto/ancho/largo/peso cargados.
+13. Atajos: Esc vuelve o cierra, "/" enfoca la búsqueda, Ctrl+S guarda ya.
+14. Pantalla "Publicada" con miniatura, precio y botón al historial.
+15. Arrastrar fotos sobre toda la página con un velo "Soltá acá".
+16. Exportar historial como JSON desde Configuración.
+17. En celu, el botón Publicar queda fijo abajo en la revisión.
+18. Tema claro / oscuro / automático en Configuración, recordado por dispositivo.
+19. "Actualizado hace N min" junto al botón Actualizar del historial, que gira mientras carga.
+20. Aviso antes de publicar si ya hay una publicación activa con título muy parecido.
+21. Sin errores en consola en demo, sin scroll horizontal en celu, todos los tests del Worker en verde, `node --check` limpio.
 
 ## Presupuesto
-20 iteraciones.
+40 iteraciones.

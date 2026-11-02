@@ -1,49 +1,48 @@
-# Informe — ronda 3: 10 mejoras de uso (26/10/2026)
+# Informe — ronda 5: 20 mejoras (02/11/2026)
 
-## Qué se hizo
-Diez mejoras, solo en el front (`app.js`, `index.html`, `styles.css`):
+## Qué se construyó
+Cinco mejoras grandes y quince chicas sobre VendeloYa, en el Worker y en la app:
 
-1. **Hacer otra igual.** ⧉ en cada ítem del historial y un botón en "Publicada": crea un borrador nuevo con las fotos y los datos, sin los ids de foto de MercadoLibre ni el link. El original no se toca.
-2. **Reordenar las fotos arrastrando** (en la compu). La primera sigue siendo la portada.
-3. **Mi cierre de descripción.** Se guarda en Configuración y el botón "+ Mi cierre" lo suma al final, una sola vez.
-4. **Nota privada** ("no se publica"), guardada con el borrador.
-5. **Precio: −5 %, +5 % y Redondear.**
-6. **Prolijar el título:** saca emojis, espacios dobles y signos repetidos, y pasa a minúsculas lo que está todo en mayúsculas.
-7. **Sin conexión:** aviso arriba y Armar/Publicar bloqueados. Al volver la señal se saca el aviso y se refresca la cuenta.
-8. **Aviso de cuenta en el inicio** (sin conectar, faltan secretos o falta la clave), con botón a Configuración.
-9. **Instalar la app** desde Configuración, cuando el navegador lo permite.
-10. **Descripción corta:** contador de caracteres y aviso en el checklist (menos de 80), que no frena el Publicar.
+**Grandes**
+1. **Preguntas**: tocar una publicada en el historial abre su panel; abajo están las preguntas sin responder, con "✨ Sugerir respuesta" (Claude, con la publicación y la nota privada) y "Enviar" (va a MercadoLibre). Rutas `GET /api/preguntas`, `POST /api/preguntas/<id>/borrador`, `POST /api/preguntas/<id>/responder`.
+2. **Parecidos**: en la revisión, bajo el rango de precio, los 5 artículos más cercanos al sugerido con precio y link.
+3. **Editar lo publicado**: en el mismo panel, cambiar precio, Pausar / Reactivar y Marcar vendida (doble toque; cierra la publicación). Ruta `POST /api/publicaciones/<mlId>`.
+4. **Mejorar con un toque** en el editor de fotos: niveles, balance de blancos, saturación y nitidez calculados de la foto; "👁 Antes" para comparar; la original queda guardada.
+5. **Totales** arriba del historial: activas, vendidas, $ vendido, visitas y preguntas sin responder.
 
-Cómo probarlo: `py -3 -m http.server 5612` en la carpeta y abrir `http://localhost:5612/?demo=1`.
+**Chicas**: fechas relativas (hoy, ayer, hace N días); filtro Vendidas; Copiar link y WhatsApp desde el panel; cuenta de fotos N/6 y aviso con menos de 3; posición del precio en palabras (por debajo / dentro / por encima); chips "+ Marca" y "+ Modelo" que faltan en el título; "+ Medidas" en la descripción; atajos Esc, "/" y Ctrl+S; pantalla Publicada con portada, precio y botón al historial; arrastrar fotos sobre toda la página; tema claro / oscuro / como el sistema; descargar el historial en JSON; "actualizado hace N min" y botón Actualizar girando; aviso si ya hay una publicada muy parecida.
+
+## Cómo correrlo
+- Local: `py -3 -m http.server 5610 --directory "W:\Working Folder Personal\Apps\VendeloYa"` y abrir `http://localhost:5610/?demo` (todo simulado, sin cuenta).
+- Tests del Worker: `node test.mjs` en `worker/`.
+- Producción: `npx wrangler deploy` en `worker/` y `npx wrangler deploy --config wrangler-app.toml` en la raíz (con el OK de Nico).
 
 ## Verificación
-| Criterio | Resultado |
-|---|---|
-| 1. Hacer otra igual | original publicado con id de foto: intacto. Copia: otro id, borrador, 2 fotos sin id, sin `ml`, con nota y miniatura. Abre la revisión. Desde "Publicada" suma un registro |
-| 2. Arrastrar | la foto 3 pasa a primera con "Portada"; un archivo soltado desde afuera sigue agregando fotos |
-| 3. Cierre | se agrega al final; el segundo toque avisa "ya está" y no duplica |
-| 4. Nota | se guarda en `publicacion.nota`, vuelve al reabrir. `worker/logica.js` no la usa |
-| 5. Precio | 45.000 → 42.750 → 44.888 → 45.000; 1.234 → 1.200; vacío sigue vacío; la barra se actualiza |
-| 6. Prolijar | "TALADRO  PERCUTOR!!! 🔥" → "Taladro Percutor!"; "Black+Decker KR504 500W" intacto; sin cambios no aparece |
-| 7. Sin conexión | aviso, Armar y Publicar bloqueados (también con fotos cargadas); al volver, todo habilitado |
-| 8. Aviso de cuenta | demo sin cuenta: aviso visible y el botón abre Configuración; reconectada: se va |
-| 9. Instalar | con un `beforeinstallprompt` simulado aparece, llama a `prompt()` una vez y se oculta |
-| 10. Descripción corta | 14 caracteres: aviso "!" y Publicar habilitado; larga: sin aviso |
-| 11. Pantallas | 1440×800: revisión sin scroll de página ni desbordes. 375×812: sin scroll horizontal. Prueba final sin errores no capturados |
-| 12. Worker | 18 tests en verde; sin `alert()` en `app.js` |
+- 23 tests del Worker en verde (3 nuevos: `cambioPublicacion`, `validarRespuesta`, `elegirParecidos`; 2 de la víspera para el seguimiento).
+- `node --check` limpio en los 7 archivos JS.
+- Cada ítem verificado en el demo por JS (DOM y eventos simulados), con consola sin errores en todas las corridas; capturas en escritorio y 375×812 sin scroll horizontal (inicio con totales, panel de publicación, revisión con chips y parecidos, Publicada).
+- Los 21 criterios de la SPEC pasan, con el criterio 4 leído según el desvío de abajo.
 
-## Decisiones propias
-- "43,5 mejoras" era un error de tipeo: Nico confirmó en la ventana de preguntas **10 mejoras de uso**.
-- La nota privada va dentro de `publicacion`: el Worker arma el ítem solo con los campos que conoce, así que no se publica.
-- El cierre se guarda en el navegador (por dispositivo).
-- Reordenar fotos arrastrando es solo para la compu; en el celu sigue la ★.
+## Decisiones tomadas por criterio propio
+- Una publicada se abre en su panel (no va directo a MercadoLibre); "Ver en MercadoLibre" está en el panel.
+- Marcar vendida pide doble toque en 6 segundos en vez de otro diálogo.
+- El precio que muestra el historial es el real de MercadoLibre cuando llegó el seguimiento (manda sobre el guardado).
+- Las respuestas se validan como MercadoLibre: sin links, mails ni teléfonos; hasta 2000 caracteres.
+- Publicadas = las que siguen en venta; Vendidas = lo que dice MercadoLibre (vendida o finalizada).
 
 ## Desvíos de la SPEC
-- Un bug propio durante el desarrollo: "Prolijar" y "+ Mi cierre" usaban la clase `.volver-ia`, que `marcarPropuesta()` recorre buscando `data-campo`, y eso rompía la apertura de la revisión. Se corrigió con una clase propia (`.mini-enlace`) y se volvió a probar todo.
-- Fuera de eso, no hubo desvíos. La consola del panel conserva los errores de ese bug (corridas anteriores a la corrección).
+- **Mejorar con IA → Mejorar con un toque, sin IA.** `wrangler ai models` no tiene segmentación ni quita-fondo; lo único que edita imágenes es FLUX.2 klein, generativo, que puede cambiar el producto. Se hizo en el cliente con canvas. Sin binding AI ni ruta nueva.
+- **Ítem 17 (Publicar fijo abajo en celu)** ya existía desde la ronda 2 (`.col-datos .acciones` sticky). Se reemplazó por **WhatsApp desde el panel**.
+- **Ítem 8 (Copiar link)** quedó en el panel de la publicación, no como botón suelto en cada fila.
+- "Borradores en la nube" ya existía (KV) y "sugerencia de precio" también (rango): se reemplazaron por totales y parecidos, como decía la SPEC desde el bootstrap.
+- `?v=` de app.js, styles.css y editor.js se subieron antes del final (hacía falta para verificar sin caché), no una sola vez al cierre.
 
-## Bloqueados
-Ninguno.
+## Bloqueado
+Nada quedó `[!]`.
+
+## Pendiente de Nico
+- Push y deploy de los dos Workers (la skill no lo hace sola).
+- Probar con la cuenta real: responder una pregunta de verdad y cambiar un precio. En demo está todo simulado; en producción cada acción va a MercadoLibre.
 
 ## Iteraciones
-13 de 20.
+9 de 40.

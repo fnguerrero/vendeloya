@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import {
   elegirAtributos, atributoParaML, recortarTitulo, limpiarDescripcion,
   armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice, aplicarDefaults,
-  estadoPublicacion, armarSeguimiento
+  estadoPublicacion, armarSeguimiento, cambioPublicacion, validarRespuesta, elegirParecidos
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -213,6 +213,33 @@ test('armarSeguimiento: cuenta preguntas por ítem y tolera visitas faltantes', 
   assert.deepEqual(s.MLA1, { estado: 'activa', vendidas: 0, disponibles: 1, precio: 1500, visitas: 23, preguntas: 2 });
   assert.deepEqual(s.MLA2, { estado: 'vendida', vendidas: 1, disponibles: 0, precio: 800, visitas: null, preguntas: 0 });
   assert.deepEqual(armarSeguimiento([]), {});
+});
+
+test('cambioPublicacion: arma el PUT y rechaza lo que no entiende', () => {
+  assert.deepEqual(cambioPublicacion('precio', '85000.4'), { price: 85000 });
+  assert.deepEqual(cambioPublicacion('pausar'), { status: 'paused' });
+  assert.deepEqual(cambioPublicacion('reactivar'), { status: 'active' });
+  assert.deepEqual(cambioPublicacion('vendida'), { status: 'closed' });
+  assert.throws(() => cambioPublicacion('precio', 0), /mayor a cero/);
+  assert.throws(() => cambioPublicacion('borrar'), /desconocida/);
+});
+
+test('validarRespuesta: texto plano, sin links ni teléfonos, hasta 2000', () => {
+  assert.equal(validarRespuesta('  Hola!   Mide 180 cm.\n\n\n\nRetiro por Caseros. '), 'Hola! Mide 180 cm.\n\nRetiro por Caseros.');
+  assert.throws(() => validarRespuesta(''), /Escribí/);
+  assert.throws(() => validarRespuesta('Mirá www.ejemplo.com'), /links/);
+  assert.throws(() => validarRespuesta('Llamame al 11 4567 8901'), /links/);
+  assert.equal(validarRespuesta('Mide 180 x 90 cm y pesa 25 kg').length, 29);
+  assert.equal(validarRespuesta('a'.repeat(3000)).length, 2000);
+});
+
+test('elegirParecidos: los más cercanos al sugerido, con link y precio', () => {
+  const res = [{ title: 'A', price: 100, permalink: 'a' }, { title: 'B', price: 900, permalink: 'b' }, { title: 'C', price: 500, permalink: 'c' },
+               { title: 'sin link', price: 500 }, { title: 'D', price: 0, permalink: 'd' }, { title: 'E', price: 520, permalink: 'e', thumbnail: 't' }];
+  const p = elegirParecidos(res, 500, 3);
+  assert.deepEqual(p.map(x => x.titulo), ['C', 'E', 'A']);
+  assert.deepEqual(p[1], { titulo: 'E', precio: 520, permalink: 'e', thumb: 't' });
+  assert.deepEqual(elegirParecidos(undefined, 500), []);
 });
 
 console.log(`\n${n} tests en verde`);

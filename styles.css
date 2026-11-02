@@ -22,8 +22,9 @@
   color-scheme: light;
 }
 
+/* Oscuro: como el sistema, salvo que en Configuración se elija claro u oscuro. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-tema="claro"]) {
     --fondo: #121212;
     --tarjeta: #1e1e1e;
     --texto: #ececec;
@@ -39,6 +40,22 @@
     --sombra: 0 1px 2px rgba(0, 0, 0, .5);
     color-scheme: dark;
   }
+}
+:root[data-tema="oscuro"] {
+    --fondo: #121212;
+    --tarjeta: #1e1e1e;
+    --texto: #ececec;
+    --suave: #a6a6a6;
+    --borde: #2e2e2e;
+    --borde-campo: #4a4a4a;
+    --azul-claro: #1c2b44;
+    --ok: #3fd18a;
+    --ok-fondo: #12301f;
+    --error: #ff7a87;
+    --error-fondo: #3a1a1e;
+    --aviso-fondo: #34301a;
+    --sombra: 0 1px 2px rgba(0, 0, 0, .5);
+    color-scheme: dark;
 }
 
 /* `hidden` es solo display:none del navegador: cualquier clase con display se lo come. */
@@ -174,6 +191,65 @@ details.tarjeta summary { cursor: pointer; font-weight: 700; }
 .estado-pausada, .estado-finalizada { background: var(--fondo); color: var(--suave); }
 .estado-en_revision { background: var(--aviso-fondo); color: var(--texto); }
 .item-seguimiento .pregunta { color: var(--error); font-weight: 600; }
+
+/* Publicada: portada y precio */
+.listo-foto { display: block; width: 140px; height: 140px; object-fit: cover; border-radius: var(--radio); margin: 0 auto 8px; box-shadow: var(--sombra); }
+.listo-precio { font-size: 1.35rem; font-weight: 800; margin: 0 0 10px; }
+.listo-precio:empty { display: none; }
+
+/* Velo al arrastrar fotos sobre la página */
+.velo-arrastre:not([hidden]) { display: grid; }
+.velo-arrastre { position: fixed; inset: 0; z-index: 50; place-items: center; pointer-events: none;
+  background: color-mix(in srgb, var(--azul) 14%, var(--fondo) 70%); outline: 4px dashed var(--azul); outline-offset: -14px;
+  font-size: 1.4rem; color: var(--azul); }
+
+/* Revisión: chips de título, posición del precio, cuenta de fotos */
+.titulo-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 12px; }
+.chip-titulo { font-size: .8rem; }
+.precio-posicion { margin: 6px 0 0; font-size: .8rem; color: var(--suave); }
+.precio-posicion[data-donde="bajo"] { color: #c77c00; }
+.precio-posicion[data-donde="alto"] { color: var(--error); }
+.precio-posicion[data-donde="rango"] { color: var(--ok); }
+.fotos-cuenta { align-self: center; flex: none; font-size: .75rem; color: var(--suave); padding: 0 4px; }
+
+/* Historial: totales, "actualizado hace", botón girando */
+.titulo-derecha { display: flex; align-items: center; gap: 10px; }
+.titulo-derecha small { margin: 0; }
+@media (max-width: 699px) { .titulo-derecha { flex-direction: column; align-items: flex-end; gap: 0; } }
+.totales { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin-bottom: 12px; }
+.totales div { background: var(--fondo); border-radius: var(--radio); padding: 6px 4px; text-align: center; min-width: 0; }
+.totales strong { display: block; font-size: 1.05rem; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.totales span { font-size: .7rem; color: var(--suave); }
+.totales .alerta strong { color: var(--error); }
+@media (max-width: 699px) { .totales { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.girando::before { content: '↻ '; display: inline-block; animation: girar 1s linear infinite; }
+@keyframes girar { to { transform: rotate(360deg); } }
+
+/* Editor: Mejorar con un toque y ver el antes */
+.filtro.mejorar { background: var(--azul-claro); color: var(--azul); font-weight: 700; }
+#editor-ver-antes:active { background: var(--amarillo); color: #333; }
+
+/* Parecidos en MercadoLibre, bajo el rango de precio */
+.parecidos { margin-top: 8px; }
+.parecidos ul { list-style: none; margin: 0; padding: 0; }
+.parecidos li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--borde); font-size: .9rem; }
+.parecidos li a { color: var(--texto); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.parecidos li a:hover { color: var(--azul); }
+.parecidos li strong { flex: none; }
+
+/* Panel de una publicación: precio, estado y preguntas */
+dialog.pub { width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
+dialog.pub .titulo-seccion h2 { margin: 0; font-size: 1.05rem; }
+dialog.pub h3 { margin: 16px 0 6px; font-size: 1rem; }
+.pub-precio { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+.pub-precio .precio-input { flex: 1 1 160px; min-width: 0; }
+.pub-precio .precio-input input { width: 100%; min-width: 0; }
+.preguntas { list-style: none; margin: 0; padding: 0; }
+.preguntas li { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--borde); }
+.preguntas li:first-child { border-top: 0; padding-top: 0; }
+.preguntas .pregunta-texto { margin: 0; font-weight: 600; }
+.preguntas small { color: var(--suave); }
+.preguntas textarea { width: 100%; box-sizing: border-box; }
 .item-borrar {
   flex: none; width: 36px; height: 36px; margin-left: 4px; border: 0; border-radius: 50%;
   background: none; color: var(--suave); font-size: 1.2rem; cursor: pointer;

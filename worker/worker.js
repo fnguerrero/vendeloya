@@ -17,15 +17,19 @@
      GET  /api/registros         historial (resúmenes)
      GET|PUT|DELETE /api/registros/<id>   un borrador o publicación guardada
      GET  /api/seguimiento       estado, visitas y preguntas de lo publicado (?forzar=1 salta el caché)
+     GET  /api/preguntas         preguntas sin responder, con el registro al que pertenecen
+     POST /api/preguntas/<id>/borrador    Claude propone una respuesta (no la envía)
+     POST /api/preguntas/<id>/responder   envía la respuesta a MercadoLibre
+     POST /api/publicaciones/<mlId>       precio | pausar | reactivar | vendida
 
    Todo /api/* pide el header x-clave = APP_SECRET. El Origin solo no
    alcanza: cualquiera lo falsifica con curl, y esta app publica en la
    cuenta real de Nico.
    ============================================================ */
 
-import { identificar, completarAtributos } from './ia.js';
+import { identificar, completarAtributos, responderPregunta as borradorConIA } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, CONDICIONES } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, CONDICIONES } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -237,7 +241,7 @@ async function precioDeMercado(env, busqueda, condicion) {
     const { status, datos } = await ml(env, `/sites/${SITIO}/search?${q}`, { tolerar: [401, 403] });
     if (status !== 200) return { disponible: false, motivo: `búsqueda cerrada (${status})` };
     const ref = precioDeReferencia(datos.results || []);
-    return ref ? { disponible: true, ...ref } : { disponible: false, motivo: 'pocos resultados' };
+    return ref ? { disponible: true, ...ref, parecidos: elegirParecidos(datos.results, ref.sugerido) } : { disponible: false, motivo: 'pocos resultados' };
   } catch (e) {
     return { disponible: false, motivo: e.message };
   }
@@ -315,11 +319,58 @@ async function seguimiento(env, forzar = false) {
 
   const porItem = armarSeguimiento(items, visitas, preguntas);
   const resultado = {
-    registros: Object.fromEntries(pubs.filter(p => porItem[p.mlId]).map(p => [p.id, porItem[p.mlId]])),
+    registros: Object.fromEntries(pubs.filter(p => porItem[p.mlId]).map(p => [p.id, { ...porItem[p.mlId], mlId: p.mlId }])),
     consultado
   };
   await env.KV.put('seguimiento', JSON.stringify(resultado), { expirationTtl: SEGUIMIENTO_TTL });
   return resultado;
+}
+
+/* ---------- preguntas y acciones sobre lo publicado ---------- */
+
+/** Preguntas sin responder, cada una con el registro de la app al que pertenece (si lo hay). */
+async function preguntas(env) {
+  const pubs = await registros.publicadas(env);
+  const porMl = new Map(pubs.map(p => [p.mlId, p.id]));
+  const titulos = new Map((await registros.listar(env)).registros.map(r => [r.id, r.titulo]));
+  const { datos } = await ml(env, '/my/received_questions/search?status=UNANSWERED&limit=50&api_version=4');
+  return {
+    preguntas: (datos?.questions || []).map(q => {
+      const registroId = porMl.get(q.item_id) || null;
+      return { id: String(q.id), mlId: q.item_id, registroId, titulo: titulos.get(registroId) || q.item_id, texto: q.text, fecha: q.date_created };
+    })
+  };
+}
+
+/** Claude propone la respuesta con lo que dice la publicación y la nota privada. No la envía. */
+async function borradorRespuesta(env, id, cuerpo) {
+  const reg = cuerpo.registroId ? await registros.leer(env, cuerpo.registroId).catch(() => null) : null;
+  const p = reg?.publicacion || {};
+  const a = reg?.analisis?.propuesta || {};
+  const { json } = await borradorConIA(env, {
+    pregunta: String(cuerpo.pregunta || '').slice(0, 2000),
+    titulo: p.titulo || a.titulo || cuerpo.titulo || '',
+    descripcion: p.descripcion || a.descripcion || '',
+    nota: p.nota || '',
+    precio: p.precio || a.precio || '',
+    condicion: p.condicion || a.condicion || ''
+  });
+  return { texto: validarRespuesta(json.respuesta) };
+}
+
+async function responderPregunta(env, id, cuerpo) {
+  const text = validarRespuesta(cuerpo.texto);
+  await ml(env, '/answers', { metodo: 'POST', cuerpo: { question_id: Number(id), text } });
+  await env.KV.delete('seguimiento'); // que el historial deje de contarla
+  return { ok: true };
+}
+
+/** Precio, pausar, reactivar o marcar vendida (cerrar) una publicación. */
+async function cambiarPublicacion(env, mlId, cuerpo) {
+  const cambio = cambioPublicacion(cuerpo.accion, cuerpo.precio);
+  const { datos } = await ml(env, `/items/${mlId}`, { metodo: 'PUT', cuerpo: cambio });
+  await env.KV.delete('seguimiento');
+  return { estado: estadoPublicacion(datos), precio: Number.isFinite(datos?.price) ? datos.price : null };
 }
 
 async function estado(env) {
@@ -352,7 +403,7 @@ async function analizar(env, cuerpo) {
   const atributos = await atributosCompletos(env, id, categoria);
 
   const precio = mercado.disponible
-    ? { valor: mercado.sugerido, fuente: 'mercadolibre', min: mercado.min, max: mercado.max, muestras: mercado.muestras }
+    ? { valor: mercado.sugerido, fuente: 'mercadolibre', min: mercado.min, max: mercado.max, muestras: mercado.muestras, parecidos: mercado.parecidos }
     : {
         valor: redondearPrecio(id.precio_estimado.sugerido), fuente: 'ia',
         min: redondearPrecio(id.precio_estimado.min), max: redondearPrecio(id.precio_estimado.max), motivo: mercado.motivo
@@ -470,6 +521,7 @@ export default {
     try {
       if (request.method === 'GET' && url.pathname === '/api/estado') return json(await estado(env), 200, origen);
       if (request.method === 'GET' && url.pathname === '/api/seguimiento') return json(await seguimiento(env, url.searchParams.has('forzar')), 200, origen);
+      if (request.method === 'GET' && url.pathname === '/api/preguntas') return json(await preguntas(env), 200, origen);
 
       if (Number(request.headers.get('content-length') || 0) > MAX_CUERPO) return json({ error: 'Las fotos pesan demasiado.' }, 413, origen);
 
@@ -492,6 +544,11 @@ export default {
       if (request.method !== 'POST') return json({ error: 'Método no permitido.' }, 405, origen);
       const cuerpo = await request.json().catch(() => null);
       if (!cuerpo) return json({ error: 'Cuerpo inválido.' }, 400, origen);
+
+      const preg = /^\/api\/preguntas\/(\d+)\/(borrador|responder)$/.exec(url.pathname);
+      if (preg) return json(await (preg[2] === 'borrador' ? borradorRespuesta : responderPregunta)(env, preg[1], cuerpo), 200, origen);
+      const pub = /^\/api\/publicaciones\/([A-Z]{3}\d{6,})$/.exec(url.pathname);
+      if (pub) return json(await cambiarPublicacion(env, pub[1], cuerpo), 200, origen);
 
       const rutas = { '/api/analizar': analizar, '/api/categoria': cambiarCategoria, '/api/revisar': revisar, '/api/publicar': publicar };
       const ruta = rutas[url.pathname];

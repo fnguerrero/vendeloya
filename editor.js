@@ -47,7 +47,7 @@ function cargarImagen(url) {
 
 /* ---------- ajustes de color (manuales) ---------- */
 
-const hayAjustes = a => a.brillo || a.contraste || a.saturacion || a.nitidez;
+const hayAjustes = a => !!(a.brillo || a.contraste || a.saturacion || a.nitidez || a.blanco?.some(f => Math.abs(f - 1) > 0.005));
 
 /** Aplica brillo, contraste, saturación y nitidez sobre los píxeles (ImageData). */
 function aplicarAjustes(datos, a) {
@@ -56,8 +56,10 @@ function aplicarAjustes(datos, a) {
   const c = a.contraste * 2.55;
   const factor = (259 * (c + 255)) / (255 * (259 - c));
   const sat = 1 + a.saturacion / 100;
+  const wb = a.blanco || null;   // balance de blancos: un factor por canal (solo lo pone Mejorar)
   for (let i = 0; i < d.length; i += 4) {
     let r = d[i], g = d[i + 1], b = d[i + 2];
+    if (wb) { r *= wb[0]; g *= wb[1]; b *= wb[2]; }
     r = factor * (r + suma - 128) + 128;
     g = factor * (g + suma - 128) + 128;
     b = factor * (b + suma - 128) + 128;
@@ -111,7 +113,43 @@ function pintarVista() {
   const lienzo = $('editor-lienzo');
   const ctx = lienzo.getContext('2d', { willReadFrequently: true });
   const copia = new ImageData(new Uint8ClampedArray(editor.base.data), editor.base.width, editor.base.height);
-  ctx.putImageData(hayAjustes(editor.ajustes) ? aplicarAjustes(copia, editor.ajustes) : copia, 0, 0);
+  const con = hayAjustes(editor.ajustes);
+  ctx.putImageData(con ? aplicarAjustes(copia, editor.ajustes) : copia, 0, 0);
+  $('editor-ver-antes').hidden = !con;   // "Antes" solo tiene sentido con algo aplicado
+}
+
+/* ---------- mejorar con un toque ---------- */
+
+/** Ajustes calculados de la foto: niveles (brillo y contraste), balance de blancos sobre
+ *  lo más claro, un poco de saturación si está lavada y nitidez suave. Nada generativo:
+ *  son los mismos controles de siempre, con valores sacados del histograma. */
+function calcularMejora(datos) {
+  const d = datos.data;
+  const hist = new Uint32Array(256);
+  let n = 0, sr = 0, sg = 0, sb = 0, claros = 0, satSuma = 0;
+  for (let i = 0; i < d.length; i += 16) {   // 1 de cada 4 píxeles alcanza
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const l = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+    hist[l]++;
+    n++;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    satSuma += mx ? (mx - mn) / mx : 0;
+    if (l > 170) { sr += r; sg += g; sb += b; claros++; }
+  }
+  if (!n) return { ...AJUSTES_CERO };
+  const percentil = p => { let acum = 0; for (let v = 0; v < 256; v++) { acum += hist[v]; if (acum >= n * p) return v; } return 255; };
+  const p2 = percentil(0.02), p98 = percentil(0.98);
+  const rango = Math.max(1, p98 - p2);
+  const brillo = Math.max(-30, Math.min(30, Math.round(((128 - (p2 + p98) / 2) / 2.55) * 0.5)));
+  const contraste = Math.max(0, Math.min(35, Math.round(((235 - rango) / 2.55) * 0.5)));
+  const saturacion = satSuma / n < 0.22 ? 12 : 0;
+  let blanco = [1, 1, 1];
+  if (claros > n * 0.02) {
+    const mr = sr / claros, mg = sg / claros, mb = sb / claros, gris = (mr + mg + mb) / 3;
+    const f = m => Math.max(0.85, Math.min(1.15, gris / m));
+    blanco = [f(mr), f(mg), f(mb)];
+  }
+  return { brillo, contraste, saturacion, nitidez: 20, blanco };
 }
 
 function pedirVista() {
@@ -227,7 +265,8 @@ async function cargarTrabajo(url) {
 }
 
 function pintarAjustes() {
-  for (const [clave, valor] of Object.entries(editor.ajustes)) {
+  for (const clave of Object.keys(AJUSTES_CERO)) {
+    const valor = editor.ajustes[clave] || 0;
     $(`aj-${clave}`).value = valor;
     $(`aj-${clave}`).nextElementSibling.textContent = valor;
   }
@@ -311,6 +350,22 @@ $('editor-aplicar').addEventListener('click', aplicarEdicion);
 $('editor-izq').addEventListener('click', () => { editor.girado = true; girarTrabajo(-1); });
 $('editor-der').addEventListener('click', () => { editor.girado = true; girarTrabajo(1); });
 $('editor-restablecer').addEventListener('click', () => { editor.girado = false; restablecer(); });
+$('editor-mejorar').addEventListener('click', () => {
+  if (!editor.base) return;
+  editor.ajustes = calcularMejora(editor.base);
+  pintarAjustes();
+  pedirVista();
+  toast('Listo. Mantené apretado "Antes" para comparar; Restablecer lo deshace.');
+});
+/* Mantener apretado "Antes": la foto sin ajustes; al soltar, vuelve. */
+function verAntes(mostrar) {
+  if (!editor.base) return;
+  if (mostrar) $('editor-lienzo').getContext('2d', { willReadFrequently: true }).putImageData(editor.base, 0, 0);
+  else pintarVista();
+}
+$('editor-ver-antes').addEventListener('pointerdown', e => { e.preventDefault(); verAntes(true); });
+$('editor-ver-antes').addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); verAntes(true); } });
+for (const ev of ['pointerup', 'pointerleave', 'pointercancel', 'keyup']) $('editor-ver-antes').addEventListener(ev, () => verAntes(false));
 for (const b of document.querySelectorAll('#editor [data-aspecto]')) b.addEventListener('click', () => elegirAspecto(b.dataset.aspecto));
 for (const clave of Object.keys(AJUSTES_CERO)) {
   $(`aj-${clave}`).addEventListener('input', e => {

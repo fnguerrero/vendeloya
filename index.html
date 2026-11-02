@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito+Sans:opsz,wght@6..12,400;6..12,600;6..12,700;6..12,800&display=swap">
-  <link rel="stylesheet" href="styles.css?v=17">
+  <link rel="stylesheet" href="styles.css?v=18">
 </head>
 <body>
   <header class="barra">
@@ -56,13 +56,21 @@
     <section id="historial" class="tarjeta">
       <div class="titulo-seccion">
         <h2>Tus publicaciones</h2>
-        <button id="refrescar-historial" class="enlace" type="button">Actualizar</button>
+        <span class="titulo-derecha"><small id="historial-actualizado" class="ayuda"></small><button id="refrescar-historial" class="enlace" type="button">Actualizar</button></span>
+      </div>
+      <div id="historial-totales" class="totales" hidden aria-label="Totales de tus publicaciones">
+        <div><strong id="total-activas">0</strong><span>activas</span></div>
+        <div><strong id="total-vendidas">0</strong><span>vendidas</span></div>
+        <div><strong id="total-plata">$ 0</strong><span>vendido</span></div>
+        <div><strong id="total-visitas">0</strong><span>visitas</span></div>
+        <div id="total-preguntas-caja"><strong id="total-preguntas">0</strong><span>sin responder</span></div>
       </div>
       <div id="historial-filtros" class="filtros" hidden>
         <div class="filtro-chips" role="group" aria-label="Filtrar por estado">
           <button type="button" class="filtro activo" data-filtro="">Todas <small></small></button>
           <button type="button" class="filtro" data-filtro="borrador">Borradores <small></small></button>
           <button type="button" class="filtro" data-filtro="publicada">Publicadas <small></small></button>
+          <button type="button" class="filtro" data-filtro="vendida">Vendidas <small></small></button>
         </div>
         <input id="historial-buscar" type="search" placeholder="Buscar por título" aria-label="Buscar por título" autocomplete="off">
       </div>
@@ -101,6 +109,7 @@
           <span id="contador" class="contador"></span>
           <input id="titulo" type="text" autocomplete="off">
         </label>
+        <div id="titulo-chips" class="titulo-chips" hidden aria-label="Palabras que la IA vio y faltan en el título"></div>
 
         <div class="dos">
           <label class="campo">Categoría
@@ -127,6 +136,7 @@
               <button type="button" class="rango-btn sugerido" data-precio="sugerido"></button>
               <button type="button" class="rango-btn" data-precio="max"></button>
             </div>
+            <p id="precio-posicion" class="precio-posicion" hidden></p>
           </div>
           <div class="precio-ajustes" role="group" aria-label="Ajustar el precio">
             <button type="button" class="ajuste-btn" data-ajuste="-5">−5 %</button>
@@ -134,10 +144,15 @@
             <button type="button" class="ajuste-btn" data-ajuste="redondear" title="Redondea el precio a un número más lindo">Redondear</button>
           </div>
           <p id="precio-fuente" class="ayuda"></p>
+          <details id="parecidos" class="grupo parecidos" hidden>
+            <summary><span>Parecidos en MercadoLibre</span><small id="parecidos-n"></small></summary>
+            <ul id="parecidos-lista"></ul>
+          </details>
         </div>
 
         <label class="campo campo-descripcion">Descripción <button type="button" class="enlace volver-ia" data-campo="descripcion" hidden>↺ Propuesta de la IA</button>
           <button id="agregar-cierre" type="button" class="enlace mini-enlace" hidden>+ Mi cierre</button>
+          <button id="agregar-medidas" type="button" class="enlace mini-enlace" hidden title="Agrega al final las medidas cargadas en los datos">+ Medidas</button>
           <span id="contador-desc" class="contador"></span>
           <textarea id="descripcion"></textarea>
         </label>
@@ -209,6 +224,8 @@
     <section id="paso-listo" class="tarjeta listo" hidden>
       <div class="sello" aria-hidden="true">✓</div>
       <h2>¡Publicada!</h2>
+      <img id="listo-foto" class="listo-foto" alt="" hidden>
+      <p id="listo-precio" class="listo-precio"></p>
       <p id="listo-texto"></p>
       <a id="listo-link" class="boton principal" target="_blank" rel="noopener">Ver la publicación</a>
       <div id="listo-compartir" class="fila">
@@ -216,6 +233,7 @@
         <button id="copiar-link" class="boton secundario" type="button">Copiar link</button>
       </div>
       <button id="otra-igual" class="boton secundario ancho" type="button">Hacer otra igual (borrador nuevo)</button>
+      <button id="listo-historial" class="boton secundario ancho" type="button">Ver en tus publicaciones</button>
       <button id="otra" class="boton secundario ancho" type="button">Publicar otra cosa</button>
     </section>
   </main>
@@ -242,6 +260,17 @@
     </div>
     <p class="ayuda">En cada publicación aparece el botón "+ Mi cierre" para sumarlo al final de la descripción. Se guarda en este dispositivo.</p>
 
+    <h3>Apariencia</h3>
+    <div class="filtro-chips" role="group" aria-label="Tema">
+      <button type="button" class="filtro tema" data-tema="auto">Como el sistema</button>
+      <button type="button" class="filtro tema" data-tema="claro">Claro</button>
+      <button type="button" class="filtro tema" data-tema="oscuro">Oscuro</button>
+    </div>
+
+    <h3>Respaldo</h3>
+    <button id="exportar-historial" class="boton secundario ancho" type="button">Descargar mi historial (JSON)</button>
+    <p class="ayuda">Todo lo que armaste, con sus fotos, en un archivo. Por si algún día hay que recuperarlo.</p>
+
     <button id="instalar-app" class="boton secundario ancho" type="button" hidden>Instalar la app en este dispositivo</button>
 
     <h3>Clave de la app</h3>
@@ -255,6 +284,7 @@
     <p class="ayuda">La clave queda solo en este dispositivo. Cerrar sesión la borra de acá; tu historial sigue guardado.</p>
   </dialog>
 
+  <div id="velo-arrastre" class="velo-arrastre" hidden aria-hidden="true"><strong>Soltá acá las fotos</strong></div>
   <div id="espera" class="espera" hidden><div class="ruedita"></div><p id="espera-texto">Pensando…</p></div>
   <div id="toast" class="toast" hidden><span id="toast-texto"></span><button id="toast-accion" type="button">Deshacer</button></div>
 
@@ -291,6 +321,8 @@
       <label class="deslizador">Saturación <input id="aj-saturacion" type="range" min="-100" max="100" value="0"><output>0</output></label>
       <label class="deslizador">Nitidez <input id="aj-nitidez" type="range" min="0" max="100" value="0"><output>0</output></label>
       <div class="editor-fila">
+        <button id="editor-mejorar" type="button" class="filtro mejorar" title="Luz, contraste, color y nitidez calculados de la foto; después los podés retocar">✨ Mejorar con un toque</button>
+        <button id="editor-ver-antes" type="button" class="filtro" hidden title="Mantené apretado para ver la foto sin ajustes">👁 Antes</button>
         <button id="editor-restablecer" type="button" class="filtro">Restablecer</button>
         <button id="editor-original" type="button" class="filtro" hidden>Volver a la original</button>
       </div>
@@ -306,6 +338,39 @@
 
   <input id="galeria-rev" type="file" accept="image/*" multiple hidden>
 
+  <dialog id="pub" class="pub" aria-label="Publicación">
+    <div class="titulo-seccion">
+      <h2 id="pub-titulo"></h2>
+      <button id="pub-cerrar" class="icono" type="button" aria-label="Cerrar">✕</button>
+    </div>
+    <p id="pub-resumen" class="ayuda"></p>
+    <div class="fila">
+      <a id="pub-ver" class="boton secundario" target="_blank" rel="noopener">Ver en MercadoLibre</a>
+      <button id="pub-copiar" class="boton secundario" type="button">Copiar link</button>
+      <button id="pub-whatsapp" class="boton secundario" type="button" title="Mandar título, precio y link por WhatsApp">WhatsApp</button>
+    </div>
+
+    <h3>Precio</h3>
+    <div class="pub-precio">
+      <div class="precio-input"><span>$</span><input id="pub-precio" type="text" inputmode="numeric" autocomplete="off" aria-label="Precio nuevo"></div>
+      <button id="pub-precio-guardar" class="boton secundario" type="button">Cambiar</button>
+    </div>
+
+    <h3>Estado</h3>
+    <div class="fila">
+      <button id="pub-pausar" class="boton secundario" type="button">Pausar</button>
+      <button id="pub-reactivar" class="boton secundario" type="button" hidden>Reactivar</button>
+      <button id="pub-vendida" class="boton peligro" type="button">Marcar vendida</button>
+    </div>
+    <p id="pub-cerrada" class="ayuda" hidden>Esta publicación ya está cerrada en MercadoLibre.</p>
+    <p class="ayuda">Marcar vendida cierra la publicación en MercadoLibre y no se puede reabrir.</p>
+
+    <h3>Preguntas sin responder</h3>
+    <p id="pub-preguntas-cargando" class="ayuda" hidden>Buscando preguntas…</p>
+    <ul id="pub-preguntas" class="preguntas"></ul>
+    <p id="pub-preguntas-vacio" class="ayuda" hidden>No hay preguntas sin responder.</p>
+  </dialog>
+
   <dialog id="confirmar">
     <h2>¿Publicar en tu cuenta?</h2>
     <p id="confirmar-texto"></p>
@@ -318,7 +383,7 @@
   </dialog>
 
   <script src="config.js?v=1"></script>
-  <script src="app.js?v=16"></script>
-  <script src="editor.js?v=2"></script>
+  <script src="app.js?v=17"></script>
+  <script src="editor.js?v=3"></script>
 </body>
 </html>

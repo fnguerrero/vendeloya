@@ -1,14 +1,24 @@
-# TODO — ronda 3: 10 mejoras de uso
+# TODO — ronda 5
 
-- [x] 0. Ganchos: exponer en `__vy` lo nuevo (duplicar, prolijar, estado de red) y poder simular offline · verif: `__vy` tiene las funciones
-- [x] 1. Hacer otra igual: botón en cada ítem del historial y en la pantalla de publicada · verif: crea registro con otro id, mismas fotos, sin `id` de foto, sin `ml`, estado borrador, y abre la revisión
-- [x] 2. Reordenar miniaturas del inicio arrastrando · verif: eventos dragstart/drop mueven la foto 3 al primer lugar y se ve "Portada" en ella
-- [x] 3. Cierre de descripción: campo en Configuración y botón "+ Mi cierre" en la descripción · verif: guardar, tocar el botón agrega al final una sola vez
-- [x] 4. Nota privada ("no se publica") en la revisión · verif: se guarda en el registro dentro de publicacion.nota y vuelve al reabrir; armarItem del Worker no la usa
-- [x] 5. Precio: botones −5 %, +5 % y Redondear · verif: 45.000 → 42.750 / 47.250 / redondeo a 100; barra y botón activo se actualizan
-- [x] 6. "Prolijar" el título · verif: "TALADRO  PERCUTOR!!! 🔥" pasa a "Taladro Percutor!"; sin cambios, el botón no aparece
-- [x] 7. Aviso sin conexión y bloqueo de Armar/Publicar · verif: eventos offline/online muestran y sacan el aviso, y el botón queda deshabilitado
-- [x] 8. Cuenta no conectada: aviso en el inicio con botón a Configuración · verif: en el demo desconectado el aviso aparece y el botón abre el diálogo
-- [x] 9. Instalar app en Configuración (beforeinstallprompt) · verif: con un evento simulado aparece el botón y llama a prompt()
-- [x] 10. Descripción corta: contador de caracteres y aviso en el checklist que no frena · verif: con 20 caracteres hay aviso "!" y Publicar sigue habilitado; con 120 desaparece
-- [x] 11. Versión de caché + verificación final contra la SPEC (compu, celu, consola, tests del Worker) · verif: checklist en INFORME
+- [x] 0. Ganchos: demo con seguimiento, preguntas, parecidos y acciones simuladas; `window.__vy` expone lo nuevo · verif: en `?demo` las rutas nuevas devuelven datos fijos sin red
+- [x] 1. Preguntas: Worker `GET /api/preguntas`, `POST /api/preguntas/<id>/responder`, `POST /api/preguntas/<id>/borrador` (Claude) + diálogo en la app desde "N sin responder" · verif: demo responde y la lista baja; test de `armarRespuesta`/`validarRespuesta`
+- [x] 2. Parecidos: `precioDeMercado` devuelve hasta 5 parecidos y la revisión los lista bajo el rango · verif: demo muestra 5 con link; sin parecidos no hay error
+- [x] 3. Editar lo publicado: Worker `POST /api/publicaciones/<mlId>` (precio | pausar | reactivar | vendida) + menú "⋯" en el historial con confirmación para vendida · verif: demo cambia chip y precio; test de `cambioPublicacion`
+- [x] 4. Mejorar con un toque (ver Supuestos; sin IA): binding AI, ruta `POST /api/foto/mejorar`, botón en el editor con antes/después · verif: `wrangler ai models` para elegir modelo; demo simula; prueba real solo si el deploy se aprueba
+- [x] 5. Totales del historial (activas, vendidas, $ vendido, visitas, sin responder) · verif: demo con 5 registros da los números esperados
+- [x] 6. Fechas relativas (hoy, ayer, hace N días, dd/mm) · verif: `fecha()` con 4 fechas en consola
+- [x] 7. Filtro "Vendidas" en el historial · verif: demo cuenta 1 vendida
+- [x] 8. Copiar link por publicada (en el panel que abre cada publicada del historial) · verif: demo, clipboard simulado, toast
+- [x] 9. Contador de fotos y aviso con menos de 3 · verif: demo con 2 fotos muestra el aviso, con 3 no
+- [x] 10. Posición del precio frente al mercado · verif: demo con precio bajo / medio / alto
+- [x] 11. Chips de marca/modelo faltantes en el título · verif: demo, tocar el chip agrega la palabra
+- [x] 12. "+ Medidas" en la descripción · verif: demo con alto/ancho cargados inserta la línea una vez
+- [x] 13. Atajos Esc, "/", Ctrl+S · verif: KeyboardEvent en demo
+- [x] 14. Pantalla Publicada con miniatura, precio y botón al historial · verif: demo publicar
+- [x] 15. Arrastrar fotos sobre toda la página · verif: dragenter/drop simulados agregan la foto
+- [x] 16. Exportar historial JSON · verif: demo genera blob con N registros
+- [x] 17. Compartir por WhatsApp desde el panel de la publicación (texto con título, precio y link) · verif: demo, open() simulado recibe wa.me con el texto. (El "Publicar fijo abajo en celu" ya existía: .col-datos .acciones es sticky desde la ronda 2)
+- [x] 18. Tema claro / oscuro / automático · verif: data-theme y color de fondo computado
+- [x] 19. "Actualizado hace N min" y botón girando · verif: demo
+- [x] 20. Aviso de título muy parecido a una activa · verif: demo con título repetido muestra aviso
+- [x] 21. Cierre: subir `?v=` y VERSION, tests, consola, capturas, commit

@@ -87,7 +87,31 @@ function bloqueImagen(dataUrl) {
   return { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } };
 }
 
-async function llamar(env, { contenido, schema, effort, maxTokens }) {
+const SCHEMA_RESPUESTA = {
+  type: 'object', additionalProperties: false, required: ['respuesta'],
+  properties: { respuesta: { type: 'string', description: 'Respuesta al comprador: 1 a 3 oraciones, texto plano, en voseo.' } }
+};
+
+/** Borrador de respuesta a una pregunta de un comprador. Nico lo revisa antes de enviarlo. */
+export function responderPregunta(env, { pregunta, titulo, descripcion, nota, precio, condicion }) {
+  return llamar(env, {
+    system: 'Sos un vendedor particular argentino que responde preguntas de compradores en MercadoLibre. ' +
+      'Respondés en voseo, corto y amable, 1 a 3 oraciones, texto plano, sin links, mails ni teléfonos (MercadoLibre los rechaza). ' +
+      'Solo usás lo que dicen la publicación y la nota privada; si algo no está, lo decís y ofrecés fijarte. ' +
+      'Nunca inventás medidas, estado ni precio, y no bajás el precio salvo que la nota lo permita.',
+    contenido: [{
+      type: 'text',
+      text: `Publicación: ${titulo}\nPrecio: $${precio}\nCondición: ${condicion}\nDescripción:\n${descripcion}\n\n` +
+        `Nota privada del vendedor (no se publica, pero sirve para responder): ${nota || '(sin nota)'}\n\n` +
+        `Pregunta del comprador: ${pregunta}`
+    }],
+    schema: SCHEMA_RESPUESTA,
+    effort: 'low',
+    maxTokens: 1000
+  });
+}
+
+async function llamar(env, { contenido, schema, effort, maxTokens, system = SISTEMA }) {
   const res = await fetch(API_URL, {
     method: 'POST',
     headers: {
@@ -100,7 +124,7 @@ async function llamar(env, { contenido, schema, effort, maxTokens }) {
     body: JSON.stringify({
       model: MODELO,
       max_tokens: maxTokens,
-      system: SISTEMA,
+      system,
       fallbacks: 'default',
       output_config: { effort, format: { type: 'json_schema', schema } },
       messages: [{ role: 'user', content: contenido }]

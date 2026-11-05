@@ -336,17 +336,24 @@ const numero = v => { const n = Number(v); return Number.isFinite(n) && n > 0 ? 
 export function leerComisiones(respuesta) {
   const lista = Array.isArray(respuesta) ? respuesta : respuesta ? [respuesta] : [];
   return lista
-    .filter(r => r && typeof r.listing_type_id === 'string' && Number.isFinite(Number(r.sale_fee_amount)))
+    .filter(r => r && typeof r.listing_type_id === 'string' && informado(r.sale_fee_amount) !== null && informado(r.sale_fee_amount) >= 0)
     .map(r => {
       const d = r.sale_fee_details || {};
       return {
         id: r.listing_type_id,
         nombre: r.listing_type_name || r.listing_type_id,
-        comision: Math.round(Number(r.sale_fee_amount) * 100) / 100,
-        pct: Number.isFinite(Number(d.percentage_fee)) ? Number(d.percentage_fee) : null,
-        fijo: Number.isFinite(Number(d.fixed_fee)) ? Number(d.fixed_fee) : 0
+        comision: Math.round(informado(r.sale_fee_amount) * 100) / 100,
+        pct: informado(d.percentage_fee),    // null = MercadoLibre no lo informó (nunca 0 por defecto)
+        fijo: informado(d.fixed_fee)
       };
     });
+}
+
+/** Un número que MercadoLibre realmente informó: null, "", ausente o no numérico → null (Number(null) daría 0, y 0 no es "sin dato"). */
+function informado(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))) return Number(v);
+  return null;
 }
 
 /**

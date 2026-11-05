@@ -262,11 +262,33 @@ test('leerComisiones: un elemento por tipo, con porcentaje y fijo; ignora lo que
   assert.deepEqual(leerComisiones({ message: 'error' }), []);
 });
 
+test('leerComisiones: null, "" o ausente es "no informado", nunca 0 (ni comisión, ni porcentaje, ni fijo)', () => {
+  const t = (extra) => leerComisiones([{ listing_type_id: 'gold_special', ...extra }]);
+  assert.deepEqual(t({ sale_fee_amount: null }), []);                    // sin comisión informada → el tipo no cuenta
+  assert.deepEqual(t({ sale_fee_amount: '' }), []);
+  assert.deepEqual(t({ sale_fee_amount: '   ' }), []);
+  assert.deepEqual(t({}), []);
+  assert.deepEqual(t({ sale_fee_amount: 'abc' }), []);
+  assert.deepEqual(t({ sale_fee_amount: -5 }), []);
+  assert.deepEqual(t({ sale_fee_amount: NaN }), []);
+  const sinDetalle = t({ sale_fee_amount: 5850, sale_fee_details: { percentage_fee: null, fixed_fee: '' } });
+  assert.equal(sinDetalle[0].comision, 5850);
+  assert.equal(sinDetalle[0].pct, null);                                 // antes: 0 → "Comisión que informa MercadoLibre (0 %)"
+  assert.equal(sinDetalle[0].fijo, null);
+  assert.equal(t({ sale_fee_amount: 5850 })[0].pct, null);
+  // un cero que MercadoLibre sí informó es un cero válido (publicación gratuita)
+  const gratis = t({ sale_fee_amount: 0, sale_fee_details: { percentage_fee: 0, fixed_fee: 0 } });
+  assert.deepEqual([gratis[0].comision, gratis[0].pct, gratis[0].fijo], [0, 0, 0]);
+  assert.equal(t({ sale_fee_amount: '5850.5', sale_fee_details: { percentage_fee: '13' } })[0].pct, 13);
+});
+
+
+
 /* Las copias del front (el bloque `>>> compartido` de app.js) se cargan tal cual y corren los mismos casos. */
 const fuenteApp = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const bloqueCompartido = /\/\* >>> compartido([\s\S]*?)\/\* <<< compartido \*\//.exec(fuenteApp)?.[1];
 assert.ok(bloqueCompartido, 'app.js no tiene el bloque ">>> compartido"');
-const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro'];
+const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision'];
 const front = new Function(`${bloqueCompartido.slice(bloqueCompartido.indexOf('*/') + 2)}\nreturn { ${NOMBRES_COMPARTIDOS.join(', ')} };`)();
 const IMPLEMENTACIONES = {
   worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos },
@@ -343,6 +365,33 @@ await testA('cambiarDeRegistro (front): guarda lo pendiente ANTES de abrir el si
   const c = armar({ pendiente: true, guardaBien: false });
   assert.equal(await cambiarDeRegistro(c.args), false);
   assert.deepEqual(c.pasos, ['cancelar', 'guardar']);
+});
+
+test('resolverComision (front): nunca asume $0; sin dato o sin ese tipo pide cargarla a mano', () => {
+  const { resolverComision } = front;
+  const tipos = [{ id: 'gold_special', nombre: 'Clásica', comision: 5850, pct: 13, fijo: 0 },
+                 { id: 'free', nombre: 'Gratuita', comision: 0, pct: null, fijo: null }];
+  const base = { tipos, disponible: true, precio: 45000, precioConsultado: 45000, manualPct: '' };
+  // exacta para el precio consultado
+  assert.deepEqual(resolverComision({ ...base, tipoId: 'gold_special' }), { fuente: 'ml', monto: 5850, pct: 13, fijo: 0 });
+  // otro precio: por porcentaje + fijo
+  assert.equal(resolverComision({ ...base, tipoId: 'gold_special', precio: 30000 }).monto, 3900);
+  // un tipo sin porcentaje informado y otro precio: no se inventa, se espera la consulta
+  assert.deepEqual(resolverComision({ ...base, tipoId: 'free', precio: 30000 }), { fuente: 'ninguna', motivo: 'actualizando' });
+  // la gratuita informada por MercadoLibre con el precio consultado sí es $0 con fuente
+  assert.deepEqual(resolverComision({ ...base, tipoId: 'free' }), { fuente: 'ml', monto: 0, pct: null, fijo: null });
+  // MercadoLibre contestó pero no devolvió Premium: no hay dato, NO es 0
+  assert.deepEqual(resolverComision({ ...base, tipoId: 'gold_pro' }), { fuente: 'ninguna', motivo: 'sin-tipo' });
+  // ...y con un % a mano sí se calcula, marcado como manual
+  assert.deepEqual(resolverComision({ ...base, tipoId: 'gold_pro', manualPct: '18' }), { fuente: 'manual', monto: 8100, pct: 18, fijo: 0 });
+  assert.equal(resolverComision({ ...base, tipoId: 'gold_pro', manualPct: '17,5' }).pct, 17.5);
+  assert.equal(resolverComision({ ...base, tipoId: 'gold_pro', manualPct: 'x' }).fuente, 'ninguna');
+  assert.equal(resolverComision({ ...base, tipoId: 'gold_pro', manualPct: '100' }).fuente, 'ninguna');
+  // MercadoLibre no contestó
+  assert.deepEqual(resolverComision({ ...base, disponible: false, tipos: [], tipoId: 'gold_special' }), { fuente: 'ninguna', motivo: 'sin-dato' });
+  assert.equal(resolverComision({ ...base, disponible: false, tipos: [], tipoId: 'gold_special', manualPct: '13' }).monto, 5850);
+  // todavía no se consultó
+  assert.deepEqual(resolverComision({ ...base, disponible: null, tipos: [], tipoId: 'gold_special' }), { fuente: 'ninguna', motivo: 'actualizando' });
 });
 
 const PAQ = { pesoG: '1500', largoCm: '40', anchoCm: '30,4', altoCm: 15 };

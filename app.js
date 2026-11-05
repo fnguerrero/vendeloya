@@ -1083,6 +1083,27 @@ async function cambiarDeRegistro({ hayPendiente, cancelarAutoguardado, guardar, 
   limpiar();
   return abrir();
 }
+
+/**
+ * La comisión de MercadoLibre para este precio y tipo de publicación. Nunca asume $0 por falta de dato.
+ *  - fuente 'ml': la informó MercadoLibre (exacta si se consultó ese mismo precio; si no, por porcentaje + fijo).
+ *  - fuente 'manual': la cargó Nico a mano, en %.
+ *  - fuente 'ninguna': no hay dato confiable. motivo: 'sin-tipo' (MercadoLibre contestó pero no ese tipo),
+ *    'sin-dato' (no contestó) o 'actualizando' (todavía se está consultando para este precio).
+ */
+function resolverComision({ tipos, disponible, tipoId, precio, precioConsultado, manualPct }) {
+  const texto = String(manualPct ?? '').trim().replace(',', '.');
+  const manual = texto === '' ? NaN : Number(texto);
+  const hayManual = Number.isFinite(manual) && manual >= 0 && manual < 100;
+  const t = disponible ? (tipos || []).find(x => x.id === tipoId) : null;
+  if (t) {
+    if (precioConsultado === precio) return { fuente: 'ml', monto: t.comision, pct: t.pct, fijo: t.fijo };
+    if (t.pct != null && t.fijo != null) return { fuente: 'ml', monto: precio * t.pct / 100 + t.fijo, pct: t.pct, fijo: t.fijo };
+    return { fuente: 'ninguna', motivo: 'actualizando' };
+  }
+  if (hayManual) return { fuente: 'manual', monto: precio * manual / 100, pct: manual, fijo: 0 };
+  return { fuente: 'ninguna', motivo: disponible === null ? 'actualizando' : disponible ? 'sin-tipo' : 'sin-dato' };
+}
 /* <<< compartido */
 
 /* Lo que cobra MercadoLibre por tipo de publicación, para el precio y la categoría de la última consulta. */
@@ -1108,18 +1129,6 @@ function pedirComisiones() {
   }, 600);
 }
 
-/** La comisión en pesos para este precio: la exacta si MercadoLibre la informó para ese precio; si no, por porcentaje. */
-function comisionPara(precio) {
-  const t = comisiones.tipos.find(x => x.id === $('tipo').value);
-  if (comisiones.disponible && t) {
-    if (comisiones.precio === precio) return { monto: t.comision, pct: t.pct, fijo: t.fijo, fuente: 'ml' };
-    if (t.pct != null) return { monto: precio * t.pct / 100 + t.fijo, pct: t.pct, fijo: t.fijo, fuente: 'ml' };
-    return { monto: t.comision, pct: null, fijo: 0, fuente: 'ml' };
-  }
-  const pct = Number(String($('comision-manual').value).replace(',', '.'));
-  return pct > 0 && pct < 100 ? { monto: precio * pct / 100, pct, fijo: 0, fuente: 'manual' } : null;
-}
-
 function pintarGanancia() {
   if ($('paso-revision').hidden && !estado.analisis) return;
   const precio = precioActual();
@@ -1127,21 +1136,24 @@ function pintarGanancia() {
   const costo = valorDinero('costo');
   const envio = retiro ? 0 : valorDinero('costo-envio');
   $('campo-costo-envio').hidden = retiro;
-  const com = comisionPara(precio);
-  const hayComision = !!com || ($('tipo').value === 'free' && comisiones.disponible);
-  $('campo-comision-manual').hidden = comisiones.disponible !== false || !!comisiones.tipos.length;
-  $('ganancia-fuente').textContent = com?.fuente === 'ml'
-    ? `Comisión que informa MercadoLibre para esta categoría${com.pct != null ? ` (${com.pct} %${com.fijo ? ` + ${pesos(com.fijo)}` : ''})` : ''}.`
-    : comisiones.disponible === false
-      ? `No pude traer la comisión (${comisiones.motivo || 'sin datos'}). Cargala a mano si querés ver cuánto te queda.`
-      : '';
-  const g = precio && hayComision ? calcularGanancia({ precio, comision: com?.monto || 0, envio, costo }) : null;
+  const tipoNombre = $('tipo').selectedOptions[0]?.textContent || 'este tipo de publicación';
+  const com = resolverComision({ tipos: comisiones.tipos, disponible: comisiones.disponible, tipoId: $('tipo').value,
+    precio, precioConsultado: comisiones.precio, manualPct: $('comision-manual').value });
+  // La comisión nunca se asume en $0: si MercadoLibre no la informó, se pide a mano.
+  $('campo-comision-manual').hidden = !(com.fuente === 'manual' || (com.fuente === 'ninguna' && com.motivo !== 'actualizando'));
+  $('ganancia-fuente').textContent = com.fuente === 'ml'
+    ? `Comisión que informa MercadoLibre${com.pct != null ? ` (${com.pct} %${com.fijo ? ` + ${pesos(com.fijo)}` : ''})` : ''}.`
+    : com.fuente === 'manual' ? 'Comisión cargada a mano: es una estimación tuya, no la de MercadoLibre.'
+    : com.motivo === 'sin-tipo' ? `MercadoLibre no informó la comisión de «${tipoNombre}» para esta categoría. Cargala a mano para ver cuánto te queda.`
+    : com.motivo === 'sin-dato' ? `No pude traer la comisión (${comisiones.motivo || 'sin datos'}). Cargala a mano para ver cuánto te queda.`
+    : 'Consultando la comisión…';
+  const g = precio && com.fuente !== 'ninguna' ? calcularGanancia({ precio, comision: com.monto, envio, costo }) : null;
   const caja = $('ganancia');
   caja.hidden = !g;
   $('ganancia-equilibrio').hidden = true;
-  if (!g) { $('resumen-ganancia').textContent = costo ? 'falta la comisión' : 'cargá lo que te costó'; return; }
+  if (!g) { $('resumen-ganancia').textContent = com.fuente === 'ninguna' && com.motivo !== 'actualizando' ? 'falta la comisión' : costo ? 'calculando…' : 'cargá lo que te costó'; return; }
   $('g-precio').textContent = pesos(g.precio);
-  $('g-comision-t').textContent = `Comisión${com?.pct != null ? ` (${com.pct} %)` : ''}`;
+  $('g-comision-t').textContent = `Comisión${com.pct != null ? ` (${com.pct} %)` : ''}`;
   $('g-comision').textContent = `− ${pesos(g.comision)}`;
   $('g-envio-fila').hidden = !g.envio;
   $('g-envio').textContent = `− ${pesos(g.envio)}`;
@@ -1152,7 +1164,7 @@ function pintarGanancia() {
   caja.dataset.signo = !g.costo ? '' : g.ganancia > 0 ? 'mas' : g.ganancia < 0 ? 'menos' : '';
   $('resumen-ganancia').textContent = g.costo ? `te quedan ${pesos(g.ganancia)}` : `te acreditan ${pesos(g.neto)}`;
   if (g.costo && g.ganancia < 0) {
-    const eq = precioDeEquilibrio({ costo: g.costo, envio: g.envio, pct: com?.pct, fijo: com?.fijo });
+    const eq = precioDeEquilibrio({ costo: g.costo, envio: g.envio, pct: com.pct, fijo: com.fijo });
     $('ganancia-equilibrio').hidden = !eq;
     $('ganancia-equilibrio').textContent = `Con este precio perdés plata. Para no perder tendrías que cobrar al menos ${pesos(eq)}.`;
   }
@@ -2130,7 +2142,8 @@ async function apiDemo(ruta, cuerpo, metodo) {
     if (FALLAS.has('comision')) return { disponible: false, motivo: 'falla simulada del demo' };
     const precio = Number(new URLSearchParams(ruta.split('?')[1]).get('precio')) || 0;
     const t = (id, nombre, pct) => ({ id, nombre, pct, fijo: 0, comision: Math.round(precio * pct) / 100 });
-    return { disponible: true, precio, tipos: [t('gold_special', 'Clásica', 13), t('gold_pro', 'Premium', 18), t('free', 'Gratuita', 0)] };
+    const sinPremium = FALLAS.has('comision-sin-premium');   // MercadoLibre contesta, pero sin el tipo Premium ni la Gratuita
+    return { disponible: true, precio, tipos: [t('gold_special', 'Clásica', 13), ...(sinPremium ? [] : [t('gold_pro', 'Premium', 18), t('free', 'Gratuita', 0)])] };
   }
   if (ruta === '/api/publicar') return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
 

@@ -6,7 +6,8 @@ import { readFileSync } from 'node:fs';
 import {
   elegirAtributos, atributoParaML, recortarTitulo, limpiarDescripcion,
   armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice, aplicarDefaults,
-  estadoPublicacion, armarSeguimiento, cambioPublicacion, validarRespuesta, elegirParecidos
+  estadoPublicacion, armarSeguimiento, cambioPublicacion, validarRespuesta, elegirParecidos,
+  leerComisiones, calcularGanancia, precioDeEquilibrio
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -240,6 +241,46 @@ test('elegirParecidos: los más cercanos al sugerido, con link y precio', () => 
   assert.deepEqual(p.map(x => x.titulo), ['C', 'E', 'A']);
   assert.deepEqual(p[1], { titulo: 'E', precio: 520, permalink: 'e', thumb: 't' });
   assert.deepEqual(elegirParecidos(undefined, 500), []);
+});
+
+/* Forma documentada de GET /sites/MLA/listing_prices (no se pudo bajar una real: da 403 sin token). */
+const LISTING_PRICES = [
+  { currency_id: 'ARS', listing_type_id: 'gold_special', listing_type_name: 'Clásica', sale_fee_amount: 5850, sale_fee_details: { percentage_fee: 13, fixed_fee: 0, gross_amount: 5850 } },
+  { currency_id: 'ARS', listing_type_id: 'gold_pro', listing_type_name: 'Premium', sale_fee_amount: 8100, sale_fee_details: { percentage_fee: 18, fixed_fee: 0, gross_amount: 8100 } },
+  { currency_id: 'ARS', listing_type_id: 'free', listing_type_name: 'Gratuita', sale_fee_amount: 0 },
+  { basura: true }
+];
+
+test('leerComisiones: un elemento por tipo, con porcentaje y fijo; ignora lo que no es comisión', () => {
+  const c = leerComisiones(LISTING_PRICES);
+  assert.deepEqual(c.map(x => x.id), ['gold_special', 'gold_pro', 'free']);
+  assert.deepEqual(c[0], { id: 'gold_special', nombre: 'Clásica', comision: 5850, pct: 13, fijo: 0 });
+  assert.equal(c[2].pct, null);
+  assert.deepEqual(leerComisiones(null), []);
+  assert.deepEqual(leerComisiones({ message: 'error' }), []);
+});
+
+test('calcularGanancia: precio − comisión − envío − costo, con margen sobre el precio', () => {
+  const g = calcularGanancia({ precio: 45000, comision: 5850, envio: 0, costo: 20000 });
+  assert.equal(g.neto, 39150);
+  assert.equal(g.ganancia, 19150);
+  assert.equal(g.margen, 42.6);
+  assert.equal(g.comisionPct, 13);
+  const conEnvio = calcularGanancia({ precio: 45000, comision: 5850, envio: 4000, costo: 20000 });
+  assert.equal(conEnvio.ganancia, 15150);
+  assert.equal(calcularGanancia({ precio: 45000, comision: 5850, costo: 60000 }).ganancia, -20850);
+  assert.equal(calcularGanancia({ precio: 0 }), null);
+  assert.equal(calcularGanancia({ precio: 1000, comision: 5000 }).comision, 1000);   // la comisión no pasa del precio
+  assert.equal(calcularGanancia({ precio: '1000', comision: 'x', envio: -5, costo: null }).ganancia, 1000);
+});
+
+test('precioDeEquilibrio: el precio donde la ganancia es cero', () => {
+  const eq = precioDeEquilibrio({ costo: 20000, envio: 4000, pct: 13, fijo: 0 });
+  assert.equal(eq, 27600);   // 24000 / 0,87 = 27586 → a la centena
+  const g = calcularGanancia({ precio: eq, comision: eq * 0.13, envio: 4000, costo: 20000 });
+  assert.ok(g.ganancia >= 0 && g.ganancia < 100);
+  assert.equal(precioDeEquilibrio({ costo: 0 }), 0);
+  assert.equal(precioDeEquilibrio({ costo: 100, pct: 100 }), 0);
 });
 
 console.log(`\n${n} tests en verde`);

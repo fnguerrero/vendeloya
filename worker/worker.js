@@ -29,7 +29,7 @@
 
 import { identificar, completarAtributos, responderPregunta as borradorConIA } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, CONDICIONES } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, CONDICIONES } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -373,6 +373,26 @@ async function cambiarPublicacion(env, mlId, cuerpo) {
   return { estado: estadoPublicacion(datos), precio: Number.isFinite(datos?.price) ? datos.price : null };
 }
 
+/**
+ * Lo que cobra MercadoLibre por vender a ese precio en esa categoría, para cada tipo
+ * de publicación. Pide token (sin token da 403). Si MercadoLibre no contesta algo
+ * con forma de comisión, devuelve disponible:false y la app deja cargar el porcentaje a mano.
+ */
+async function comision(env, categoria, precio) {
+  const p = Math.round(Number(precio));
+  if (!/^[A-Z]{3}\d+$/.test(categoria || '') || !(p > 0)) {
+    throw Object.assign(new Error('Faltan la categoría o el precio.'), { status: 400 });
+  }
+  try {
+    const q = new URLSearchParams({ price: String(p), category_id: categoria, currency_id: 'ARS' });
+    const { status, datos } = await ml(env, `/sites/${SITIO}/listing_prices?${q}`, { tolerar: [400, 401, 403, 404] });
+    const tipos = status === 200 ? leerComisiones(datos) : [];
+    return tipos.length ? { disponible: true, precio: p, tipos } : { disponible: false, motivo: `MercadoLibre no informó comisiones (${status})` };
+  } catch (e) {
+    return { disponible: false, motivo: e.message };
+  }
+}
+
 async function estado(env) {
   const faltan = faltanSecretos(env);
   if (faltan.length) return { conectado: false, faltan };
@@ -522,6 +542,7 @@ export default {
       if (request.method === 'GET' && url.pathname === '/api/estado') return json(await estado(env), 200, origen);
       if (request.method === 'GET' && url.pathname === '/api/seguimiento') return json(await seguimiento(env, url.searchParams.has('forzar')), 200, origen);
       if (request.method === 'GET' && url.pathname === '/api/preguntas') return json(await preguntas(env), 200, origen);
+      if (request.method === 'GET' && url.pathname === '/api/comision') return json(await comision(env, url.searchParams.get('categoria'), url.searchParams.get('precio')), 200, origen);
 
       if (Number(request.headers.get('content-length') || 0) > MAX_CUERPO) return json({ error: 'Las fotos pesan demasiado.' }, 413, origen);
 

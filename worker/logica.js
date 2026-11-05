@@ -257,6 +257,61 @@ export function elegirParecidos(resultados, sugerido, n = 5) {
     .map(r => ({ titulo: r.title, precio: Number(r.price), permalink: r.permalink, thumb: r.thumbnail || '' }));
 }
 
+/* ---------- costos y ganancia ---------- */
+
+const numero = v => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
+
+/**
+ * Lo que cobra MercadoLibre por vender, por cada tipo de publicación, a partir de
+ * la respuesta de GET /sites/MLA/listing_prices?price=..&category_id=.. (un arreglo
+ * con un elemento por tipo: sale_fee_amount y sale_fee_details con el porcentaje y
+ * el cargo fijo). Se descarta lo que no tiene forma de comisión.
+ */
+export function leerComisiones(respuesta) {
+  const lista = Array.isArray(respuesta) ? respuesta : respuesta ? [respuesta] : [];
+  return lista
+    .filter(r => r && typeof r.listing_type_id === 'string' && Number.isFinite(Number(r.sale_fee_amount)))
+    .map(r => {
+      const d = r.sale_fee_details || {};
+      return {
+        id: r.listing_type_id,
+        nombre: r.listing_type_name || r.listing_type_id,
+        comision: Math.round(Number(r.sale_fee_amount) * 100) / 100,
+        pct: Number.isFinite(Number(d.percentage_fee)) ? Number(d.percentage_fee) : null,
+        fijo: Number.isFinite(Number(d.fixed_fee)) ? Number(d.fixed_fee) : 0
+      };
+    });
+}
+
+/**
+ * ¿Cuánto queda? precio − comisión − envío a cargo − costo del producto.
+ * Todo en pesos y por unidad. `neto` es lo que acredita MercadoLibre (antes del costo);
+ * `ganancia` es lo que queda en el bolsillo. El margen es sobre el precio de venta.
+ * Los impuestos del vendedor (monotributo, IIBB) no se incluyen: dependen de cada cuenta.
+ */
+export function calcularGanancia({ precio, comision, envio, costo }) {
+  const p = numero(precio);
+  if (!p) return null;
+  const c = Math.min(numero(comision), p);
+  const e = numero(envio);
+  const k = numero(costo);
+  const neto = p - c - e;
+  const ganancia = neto - k;
+  return {
+    precio: p, comision: c, envio: e, costo: k, neto, ganancia,
+    margen: Math.round((ganancia / p) * 1000) / 10,           // % con un decimal
+    comisionPct: Math.round((c / p) * 1000) / 10
+  };
+}
+
+/** Precio mínimo para no perder: el que deja la ganancia en cero con esa comisión porcentual. */
+export function precioDeEquilibrio({ costo, envio, pct, fijo }) {
+  const k = numero(costo) + numero(envio) + numero(fijo);
+  const f = numero(pct) / 100;
+  if (!k || f >= 1) return 0;
+  return redondearPrecio(k / (1 - f));
+}
+
 /* El historial guarda hasta esta cantidad; los más viejos se caen de la lista (no del KV). */
 export const MAX_HISTORIAL = 200;
 

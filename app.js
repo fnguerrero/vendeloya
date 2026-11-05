@@ -577,6 +577,9 @@ function mostrarRevision(r, guardada) {
   $('garantia').value = p.garantia || '';
   $('envio').value = p.envio ?? 'retiro';
   $('cantidad').value = p.cantidad || 1;
+  $('costo').value = miles(p.costo);
+  $('costo-envio').value = miles(p.costoEnvio);
+  $('comision-manual').value = p.comisionManual || '';
 
   const categoria = guardada?.categoriaDatos || r.categoria;
   const categorias = r.categorias.some(c => c.id === categoria.id)
@@ -863,6 +866,111 @@ $('precio').addEventListener('input', () => {
   marcarPrecio();
 });
 
+/* ---------- costos y ganancia ---------- */
+
+/* Misma cuenta que calcularGanancia/precioDeEquilibrio de worker/logica.js (con tests en node test.mjs):
+   la app no importa del Worker, así que viven las dos. */
+const positivo = v => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
+
+function calcularGanancia({ precio, comision, envio, costo }) {
+  const p = positivo(precio);
+  if (!p) return null;
+  const c = Math.min(positivo(comision), p);
+  const e = positivo(envio);
+  const k = positivo(costo);
+  const neto = p - c - e;
+  return { precio: p, comision: c, envio: e, costo: k, neto, ganancia: neto - k,
+    margen: Math.round(((neto - k) / p) * 1000) / 10, comisionPct: Math.round((c / p) * 1000) / 10 };
+}
+
+function precioDeEquilibrio({ costo, envio, pct, fijo }) {
+  const k = positivo(costo) + positivo(envio) + positivo(fijo);
+  const f = positivo(pct) / 100;
+  if (!k || f >= 1) return 0;
+  const v = k / (1 - f);
+  const paso = v >= 50000 ? 1000 : 100;
+  return Math.max(paso, Math.round(v / paso) * paso);
+}
+
+/* Lo que cobra MercadoLibre por tipo de publicación, para el precio y la categoría de la última consulta. */
+const comisiones = { clave: '', precio: 0, tipos: [], disponible: null, motivo: '' };
+let comisionesTimer;
+
+/** Pide la comisión al Worker (con una pausa, para no consultar en cada tecla). */
+function pedirComisiones() {
+  clearTimeout(comisionesTimer);
+  comisionesTimer = setTimeout(async () => {
+    const precio = precioActual();
+    const categoria = $('categoria').value;
+    if (!precio || !categoria) return;
+    const clave = `${categoria}|${precio}`;
+    if (comisiones.clave === clave) return;
+    try {
+      const r = await api(`/api/comision?categoria=${encodeURIComponent(categoria)}&precio=${precio}`);
+      Object.assign(comisiones, { clave, precio, tipos: r.tipos || [], disponible: !!r.disponible, motivo: r.motivo || '' });
+    } catch (e) {
+      Object.assign(comisiones, { clave: '', precio: 0, tipos: [], disponible: false, motivo: e.message });
+    }
+    pintarGanancia();
+  }, 600);
+}
+
+/** La comisión en pesos para este precio: la exacta si MercadoLibre la informó para ese precio; si no, por porcentaje. */
+function comisionPara(precio) {
+  const t = comisiones.tipos.find(x => x.id === $('tipo').value);
+  if (comisiones.disponible && t) {
+    if (comisiones.precio === precio) return { monto: t.comision, pct: t.pct, fijo: t.fijo, fuente: 'ml' };
+    if (t.pct != null) return { monto: precio * t.pct / 100 + t.fijo, pct: t.pct, fijo: t.fijo, fuente: 'ml' };
+    return { monto: t.comision, pct: null, fijo: 0, fuente: 'ml' };
+  }
+  const pct = Number(String($('comision-manual').value).replace(',', '.'));
+  return pct > 0 && pct < 100 ? { monto: precio * pct / 100, pct, fijo: 0, fuente: 'manual' } : null;
+}
+
+function pintarGanancia() {
+  if ($('paso-revision').hidden && !estado.analisis) return;
+  const precio = precioActual();
+  const retiro = $('envio').value === 'retiro';
+  const costo = valorDinero('costo');
+  const envio = retiro ? 0 : valorDinero('costo-envio');
+  $('campo-costo-envio').hidden = retiro;
+  const com = comisionPara(precio);
+  const hayComision = !!com || ($('tipo').value === 'free' && comisiones.disponible);
+  $('campo-comision-manual').hidden = comisiones.disponible !== false || !!comisiones.tipos.length;
+  $('ganancia-fuente').textContent = com?.fuente === 'ml'
+    ? `Comisión que informa MercadoLibre para esta categoría${com.pct != null ? ` (${com.pct} %${com.fijo ? ` + ${pesos(com.fijo)}` : ''})` : ''}.`
+    : comisiones.disponible === false
+      ? `No pude traer la comisión (${comisiones.motivo || 'sin datos'}). Cargala a mano si querés ver cuánto te queda.`
+      : '';
+  const g = precio && hayComision ? calcularGanancia({ precio, comision: com?.monto || 0, envio, costo }) : null;
+  const caja = $('ganancia');
+  caja.hidden = !g;
+  $('ganancia-equilibrio').hidden = true;
+  if (!g) { $('resumen-ganancia').textContent = costo ? 'falta la comisión' : 'cargá lo que te costó'; return; }
+  $('g-precio').textContent = pesos(g.precio);
+  $('g-comision-t').textContent = `Comisión${com?.pct != null ? ` (${com.pct} %)` : ''}`;
+  $('g-comision').textContent = `− ${pesos(g.comision)}`;
+  $('g-envio-fila').hidden = !g.envio;
+  $('g-envio').textContent = `− ${pesos(g.envio)}`;
+  $('g-costo').textContent = g.costo ? `− ${pesos(g.costo)}` : '—';
+  const total = caja.querySelector('.total dt');
+  total.textContent = g.costo ? `Te queda (${g.margen} %)` : 'Te acreditan';
+  $('g-ganancia').textContent = pesos(g.costo ? g.ganancia : g.neto);
+  caja.dataset.signo = !g.costo ? '' : g.ganancia > 0 ? 'mas' : g.ganancia < 0 ? 'menos' : '';
+  $('resumen-ganancia').textContent = g.costo ? `te quedan ${pesos(g.ganancia)}` : `te acreditan ${pesos(g.neto)}`;
+  if (g.costo && g.ganancia < 0) {
+    const eq = precioDeEquilibrio({ costo: g.costo, envio: g.envio, pct: com?.pct, fijo: com?.fijo });
+    $('ganancia-equilibrio').hidden = !eq;
+    $('ganancia-equilibrio').textContent = `Con este precio perdés plata. Para no perder tendrías que cobrar al menos ${pesos(eq)}.`;
+  }
+}
+
+/* Los montos se tipean con puntos de miles, igual que el precio. */
+const valorDinero = id => Number(String($(id).value).replace(/\D/g, '')) || 0;
+for (const id of ['costo', 'costo-envio']) {
+  $(id).addEventListener('input', () => { $(id).value = miles(valorDinero(id)); });
+}
+
 /* ---------- lo que vio la IA (columna derecha) ---------- */
 
 const CONFIANZA = { alta: { pct: 90, txt: 'Alta' }, media: { pct: 60, txt: 'Media' }, baja: { pct: 30, txt: 'Baja' } };
@@ -961,6 +1069,8 @@ function dibujarCategoria(categoria, atributosCrudos, tipoElegido) {
   $('resumen-opcionales').textContent = `${opcionales.filter(a => String(a.valor ?? '').trim()).length} de ${opcionales.length}`;
   resumirVenta();
   actualizarChecklist();
+  pedirComisiones();
+  pintarGanancia();
 }
 
 $('categoria').addEventListener('change', async () => {
@@ -1083,6 +1193,8 @@ function tocado(e) {
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
   if (['envio', 'cantidad', 'tipo'].includes(e?.target?.id)) resumirVenta();
+  pintarGanancia();
+  if (['precio', 'tipo'].includes(e?.target?.id)) pedirComisiones();
   $('resultado-revision').hidden = true;
   programarGuardado();
 }
@@ -1569,6 +1681,9 @@ function leerPublicacion() {
     envio: $('envio').value,
     descripcion: $('descripcion').value,
     nota: $('nota').value.trim(), // privada: el Worker solo arma el ítem con los campos que conoce
+    costo: valorDinero('costo'),             // privados también: costo del producto y envío a cargo
+    costoEnvio: valorDinero('costo-envio'),
+    comisionManual: $('comision-manual').value.trim(),
     maxTitulo: estado.categoria?.maxTitulo || 60,
     pideGtin: !!estado.categoria?.pideGtin,
     categoriaDatos: estado.categoria,
@@ -1781,6 +1896,13 @@ async function apiDemo(ruta, cuerpo, metodo) {
       ? { ok: false, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`), errores: [`Falta completar: ${falta.join(', ')}.`] }
       : { ok: true, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`),
           avisos: cuerpo.publicacion.envio === 'retiro' ? [] : ['Este producto no entra en Mercado Envíos (por tamaño o categoría): el envío queda a acordar con el comprador.'] };
+  }
+  if (ruta.startsWith('/api/comision')) {
+    // Demo: porcentajes inventados, solo para ver la pantalla (los reales los informa MercadoLibre).
+    if (FALLAS.has('comision')) return { disponible: false, motivo: 'falla simulada del demo' };
+    const precio = Number(new URLSearchParams(ruta.split('?')[1]).get('precio')) || 0;
+    const t = (id, nombre, pct) => ({ id, nombre, pct, fijo: 0, comision: Math.round(precio * pct) / 100 });
+    return { disponible: true, precio, tipos: [t('gold_special', 'Clásica', 13), t('gold_pro', 'Premium', 18), t('free', 'Gratuita', 0)] };
   }
   if (ruta === '/api/publicar') return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
 

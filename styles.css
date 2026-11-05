@@ -707,3 +707,15 @@ dialog.config .titulo-seccion h2 { margin: 0; }
   .editor-escena { min-height: 420px; }
   .editor-herramientas { overflow: auto; }
 }
+
+/* Costos y ganancia (solo para el vendedor) */
+#grupo-ganancia .precio-input span { font-size: 1.1rem; }
+.ganancia { margin: 10px 0 0; display: grid; gap: 4px; }
+.ganancia div { display: flex; justify-content: space-between; gap: 10px; font-size: .92rem; }
+.ganancia dt { color: var(--suave); }
+.ganancia dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ganancia .total { border-top: 1px solid var(--borde); padding-top: 6px; margin-top: 2px; font-size: 1rem; }
+.ganancia .total dt { color: inherit; font-weight: 700; }
+.ganancia[data-signo="mas"] .total dd { color: var(--ok); }
+.ganancia[data-signo="menos"] .total dd { color: var(--error); }
+#grupo-ganancia .precio-input input { font-size: 1.1rem; padding: 8px 10px; }

@@ -662,9 +662,9 @@ async function correrCola() {
   toast(fallaron ? `${listas} listos, ${fallaron} con error: revisalos en la cola.` : `Listos los ${listas} de la cola.`);
 }
 
-function abrirDeCola(c) {
-  c.visto = true;
-  return abrirRegistro(c.id);
+async function abrirDeCola(c) {
+  if (await abrirRegistro(c.id)) c.visto = true;
+  pintarCola();
 }
 
 $('cola-sumar').addEventListener('click', sumarACola);
@@ -1071,6 +1071,18 @@ function aGramos(texto) {
   const g = u === 'mg' ? n / 1000 : u === 'kg' ? n * 1000 : u === 'lb' ? n * 453.592 : u === 'oz' ? n * 28.3495 : n;
   return g > 0 ? Math.max(1, Math.round(g)) : null;
 }
+
+/**
+ * Cambiar de registro sin perder lo editado: corta el autoguardado, guarda lo pendiente (si no se
+ * puede, NO cambia y devuelve false), limpia el estado de guardado del registro viejo y recién
+ * ahí abre el nuevo. Devuelve lo que devuelve `abrir` (true si quedó abierto).
+ */
+async function cambiarDeRegistro({ hayPendiente, cancelarAutoguardado, guardar, limpiar, abrir }) {
+  cancelarAutoguardado();
+  if (hayPendiente() && !(await guardar())) return false;
+  limpiar();
+  return abrir();
+}
 /* <<< compartido */
 
 /* Lo que cobra MercadoLibre por tipo de publicación, para el precio y la categoría de la última consulta. */
@@ -1406,7 +1418,7 @@ function programarGuardado() {
 
 /** Guarda lo editado (y lo que venga en `extra`) en el registro actual. */
 async function guardar(extra = {}, { alSalir = false } = {}) {
-  if (!estado.registroId) return;
+  if (!estado.registroId) return true;
   clearTimeout(guardadoTimer);
   extraPendiente = { ...extraPendiente, ...extra };
   sinGuardar = true;
@@ -1418,9 +1430,11 @@ async function guardar(extra = {}, { alSalir = false } = {}) {
     extraPendiente = {};
     sinGuardar = false;
     marcarGuardado('Guardado ✓');
+    return true;
   } catch (e) {
     marcarGuardado('No se pudo guardar');
     console.warn('guardar:', e.message);
+    return false;
   }
 }
 
@@ -1614,6 +1628,22 @@ function borrarRegistro(r, registros) {
 }
 
 async function abrirRegistro(id, { silencioso = false } = {}) {
+  // Lo editado en el registro que está abierto se guarda ANTES de cambiar: si no, el autoguardado
+  // (1,2 s después) grabaría la pantalla del siguiente registro y la edición se perdería.
+  const abierto = estado.registroId && estado.registroId !== id && !$('paso-revision').hidden;
+  const cambio = await cambiarDeRegistro({
+    hayPendiente: () => abierto && sinGuardar,
+    cancelarAutoguardado: () => clearTimeout(guardadoTimer),
+    guardar: () => guardar(),
+    limpiar: () => { sinGuardar = false; extraPendiente = {}; },
+    abrir: () => abrirRegistroYa(id, { silencioso })
+  });
+  if (cambio === false && !silencioso) toast('No se pudo guardar lo que editaste: no cambio de publicación para no perderlo. Reintentá el guardado.');
+  return cambio;
+}
+
+/** Abre el registro (sin guardar nada antes: eso lo hace abrirRegistro). true si quedó abierto. */
+async function abrirRegistroYa(id, { silencioso = false } = {}) {
   if (!silencioso) esperar('Abriendo…');
   try {
     const reg = await api(`/api/registros/${id}`);
@@ -1622,13 +1652,15 @@ async function abrirRegistro(id, { silencioso = false } = {}) {
     estado.fotos = reg.fotos || [];
     estado.analisis = reg.analisis;
     estado.estadoReg = reg.estado === 'publicada' ? 'publicada' : 'borrador';
-    if (reg.estado === 'publicada') { mostrarListo(reg.ml || {}, null); return; }
+    if (reg.estado === 'publicada') { mostrarListo(reg.ml || {}, null); return true; }
     mostrarRevision(reg.analisis, reg.publicacion);
     marcarGuardado('Guardado ✓');
     local('vendeloya.actual', reg.id);
+    return true;
   } catch (e) {
     local('vendeloya.actual', null);
     if (!silencioso) toast(`No se pudo abrir: ${e.message}`);
+    return false;
   } finally {
     esperar('');
   }
@@ -2162,7 +2194,7 @@ if (DEMO) {
   document.title = 'VendeloYa (demo)';
   // Ganchos para probar sin manos (solo en el demo).
   window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista, api, cargarHistorial, fotosCambiaron, lineaMedidas, armarRespaldo, aplicarTema,
-    hacerOtraIgual, cola, correrCola, sumarACola, pintarCola, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion };
+    hacerOtraIgual, abrirRegistro, cola, correrCola, sumarACola, pintarCola, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion };
 }
 dibujarFotos();
 refrescarCuenta();

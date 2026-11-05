@@ -14,6 +14,7 @@ import {
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
 let n = 0;
 const test = (nombre, fn) => { fn(); n++; console.log('ok', nombre); };
+const testA = async (nombre, fn) => { await fn(); n++; console.log('ok', nombre); };
 
 test('elegirAtributos: obligatorios primero, nada read_only ni manejado aparte', () => {
   const elegidos = elegirAtributos(attrs, 'usado');
@@ -265,7 +266,7 @@ test('leerComisiones: un elemento por tipo, con porcentaje y fijo; ignora lo que
 const fuenteApp = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const bloqueCompartido = /\/\* >>> compartido([\s\S]*?)\/\* <<< compartido \*\//.exec(fuenteApp)?.[1];
 assert.ok(bloqueCompartido, 'app.js no tiene el bloque ">>> compartido"');
-const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos'];
+const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro'];
 const front = new Function(`${bloqueCompartido.slice(bloqueCompartido.indexOf('*/') + 2)}\nreturn { ${NOMBRES_COMPARTIDOS.join(', ')} };`)();
 const IMPLEMENTACIONES = {
   worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos },
@@ -316,6 +317,32 @@ enAmbas('precioDeEquilibrio: barrido, en ningún caso la ganancia es negativa ni
     }
   }
   assert.ok(casos > 1500, `pocos casos: ${casos}`);
+});
+
+await testA('cambiarDeRegistro (front): guarda lo pendiente ANTES de abrir el siguiente y no cambia si no pudo guardar', async () => {
+  const { cambiarDeRegistro } = front;
+  const armar = ({ pendiente, guardaBien = true }) => {
+    const pasos = [];
+    return { pasos, args: {
+      hayPendiente: () => pendiente,
+      cancelarAutoguardado: () => pasos.push('cancelar'),
+      guardar: async () => { pasos.push('guardar'); return guardaBien; },
+      limpiar: () => pasos.push('limpiar'),
+      abrir: async () => { pasos.push('abrir'); return true; }
+    } };
+  };
+  // editar el título y tocar "Siguiente de la cola": el autoguardado se corta, se guarda y recién ahí se abre
+  const a = armar({ pendiente: true });
+  assert.equal(await cambiarDeRegistro(a.args), true);
+  assert.deepEqual(a.pasos, ['cancelar', 'guardar', 'limpiar', 'abrir']);
+  // sin nada pendiente no hay guardado de más
+  const b = armar({ pendiente: false });
+  assert.equal(await cambiarDeRegistro(b.args), true);
+  assert.deepEqual(b.pasos, ['cancelar', 'limpiar', 'abrir']);
+  // si no se pudo guardar NO se abre el otro (la edición sigue en pantalla) ni se limpia el estado del viejo
+  const c = armar({ pendiente: true, guardaBien: false });
+  assert.equal(await cambiarDeRegistro(c.args), false);
+  assert.deepEqual(c.pasos, ['cancelar', 'guardar']);
 });
 
 const PAQ = { pesoG: '1500', largoCm: '40', anchoCm: '30,4', altoCm: 15 };

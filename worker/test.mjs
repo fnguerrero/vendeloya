@@ -261,7 +261,19 @@ test('leerComisiones: un elemento por tipo, con porcentaje y fijo; ignora lo que
   assert.deepEqual(leerComisiones({ message: 'error' }), []);
 });
 
-test('calcularGanancia: precio − comisión − envío − costo, con margen sobre el precio', () => {
+/* Las copias del front (el bloque `>>> compartido` de app.js) se cargan tal cual y corren los mismos casos. */
+const fuenteApp = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
+const bloqueCompartido = /\/\* >>> compartido([\s\S]*?)\/\* <<< compartido \*\//.exec(fuenteApp)?.[1];
+assert.ok(bloqueCompartido, 'app.js no tiene el bloque ">>> compartido"');
+const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos'];
+const front = new Function(`${bloqueCompartido.slice(bloqueCompartido.indexOf('*/') + 2)}\nreturn { ${NOMBRES_COMPARTIDOS.join(', ')} };`)();
+const IMPLEMENTACIONES = {
+  worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos },
+  front
+};
+const enAmbas = (nombre, fn) => test(nombre, () => { for (const [donde, impl] of Object.entries(IMPLEMENTACIONES)) { try { fn(impl); } catch (e) { e.message = `[${donde}] ${e.message}`; throw e; } } });
+
+enAmbas('calcularGanancia: precio − comisión − envío − costo, con margen sobre el precio (worker y front)', ({ calcularGanancia }) => {
   const g = calcularGanancia({ precio: 45000, comision: 5850, envio: 0, costo: 20000 });
   assert.equal(g.neto, 39150);
   assert.equal(g.ganancia, 19150);
@@ -275,13 +287,35 @@ test('calcularGanancia: precio − comisión − envío − costo, con margen so
   assert.equal(calcularGanancia({ precio: '1000', comision: 'x', envio: -5, costo: null }).ganancia, 1000);
 });
 
-test('precioDeEquilibrio: el precio donde la ganancia es cero', () => {
-  const eq = precioDeEquilibrio({ costo: 20000, envio: 4000, pct: 13, fijo: 0 });
-  assert.equal(eq, 27600);   // 24000 / 0,87 = 27586 → a la centena
-  const g = calcularGanancia({ precio: eq, comision: eq * 0.13, envio: 4000, costo: 20000 });
-  assert.ok(g.ganancia >= 0 && g.ganancia < 100);
+enAmbas('precioDeEquilibrio: caso exacto, caso que antes quedaba abajo y bordes (worker y front)', ({ precioDeEquilibrio, calcularGanancia }) => {
+  assert.equal(precioDeEquilibrio({ costo: 20000, envio: 4000, pct: 13, fijo: 0 }), 27600);   // 24000 / 0,87 = 27586 → arriba
+  // El caso de la revisión: 10.040 con 13 % necesita 11.540; redondeando al más cercano daba 11.500 y perdía $35.
+  const eq = precioDeEquilibrio({ costo: 10040, envio: 0, pct: 13, fijo: 0 });
+  assert.equal(eq, 11600);
+  assert.ok(calcularGanancia({ precio: eq, comision: eq * 0.13, envio: 0, costo: 10040 }).ganancia >= 0);
+  assert.equal(precioDeEquilibrio({ costo: 8700, pct: 13 }), 10000);   // 8700 / 0,87 = 10000 exacto: no sube un escalón de más
   assert.equal(precioDeEquilibrio({ costo: 0 }), 0);
   assert.equal(precioDeEquilibrio({ costo: 100, pct: 100 }), 0);
+});
+
+enAmbas('precioDeEquilibrio: barrido, en ningún caso la ganancia es negativa ni sobra más de un escalón (worker y front)', ({ precioDeEquilibrio, calcularGanancia }) => {
+  let casos = 0;
+  for (const pct of [0, 5, 13, 18, 22.5, 27.5, 35]) {
+    for (const fijo of [0, 50, 1000]) {
+      for (const envio of [0, 500, 4000]) {
+        for (let costo = 1; costo <= 400000; costo = Math.ceil(costo * 1.037) + 3) {
+          const eq = precioDeEquilibrio({ costo, envio, pct, fijo });
+          const g = calcularGanancia({ precio: eq, comision: eq * pct / 100 + fijo, envio, costo });
+          assert.ok(g.ganancia >= -0.005, `pierde ${g.ganancia} con costo ${costo}, envío ${envio}, ${pct} % + ${fijo}: equilibrio ${eq}`);
+          const exacto = (costo + envio + fijo) / (1 - pct / 100);
+          const paso = exacto >= 50000 ? 1000 : 100;
+          assert.ok(eq - exacto < paso + 1e-6, `sobra más de un escalón: ${eq} vs ${exacto}`);
+          casos++;
+        }
+      }
+    }
+  }
+  assert.ok(casos > 1500, `pocos casos: ${casos}`);
 });
 
 const PAQ = { pesoG: '1500', largoCm: '40', anchoCm: '30,4', altoCm: 15 };
@@ -304,7 +338,7 @@ test('paqueteParaML: atributos SELLER_PACKAGE_* con User Products, shipping.dime
   assert.equal(paqueteParaML({}, { userProducts: true }), null);
 });
 
-test('aCentimetros y aGramos: convierten lo que escribió la IA o Nico', () => {
+enAmbas('aCentimetros y aGramos: convierten lo que escribió la IA o Nico (worker y front)', ({ aCentimetros, aGramos }) => {
   assert.equal(aCentimetros('45 cm'), 45);
   assert.equal(aCentimetros('1,2 m'), 120);
   assert.equal(aCentimetros('800 mm'), 80);

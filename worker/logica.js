@@ -370,12 +370,14 @@ export function calcularGanancia({ precio, comision, envio, costo }) {
   };
 }
 
-/** Precio mínimo para no perder: el que deja la ganancia en cero con esa comisión porcentual. */
+/** El precio más bajo (a la centena, o al millar arriba de $50.000) con el que la ganancia no es negativa. Siempre redondea hacia arriba. */
 export function precioDeEquilibrio({ costo, envio, pct, fijo }) {
   const k = numero(costo) + numero(envio) + numero(fijo);
   const f = numero(pct) / 100;
   if (!k || f >= 1) return 0;
-  return redondearPrecio(k / (1 - f));
+  const v = k / (1 - f);
+  const paso = v >= 50000 ? 1000 : 100;
+  return Math.ceil(v / paso - 1e-9) * paso;
 }
 
 /* El historial guarda hasta esta cantidad; los más viejos se caen de la lista (no del KV). */

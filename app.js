@@ -903,23 +903,6 @@ function resumirVenta() {
 
 /* ---------- envío: peso y medidas del paquete ---------- */
 
-/* Misma conversión que aCentimetros/aGramos de worker/logica.js (con tests): la app no importa del Worker. */
-function aCentimetros(texto) {
-  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mm|cm|m|"|in|pulgadas?)?\s*$/i.exec(String(texto ?? ''));
-  if (!m) return null;
-  const n = Number(m[1].replace(',', '.'));
-  const u = (m[2] || 'cm').toLowerCase();
-  const cm = u === 'mm' ? n / 10 : u === 'm' ? n * 100 : /^(in|"|pulgada)/.test(u) ? n * 2.54 : n;
-  return cm > 0 ? Math.max(1, Math.round(cm)) : null;
-}
-function aGramos(texto) {
-  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mg|g|kg|lb|oz)?\s*$/i.exec(String(texto ?? ''));
-  if (!m) return null;
-  const n = Number(m[1].replace(',', '.'));
-  const u = (m[2] || 'g').toLowerCase();
-  const g = u === 'mg' ? n / 1000 : u === 'kg' ? n * 1000 : u === 'lb' ? n * 453.592 : u === 'oz' ? n * 28.3495 : n;
-  return g > 0 ? Math.max(1, Math.round(g)) : null;
-}
 
 const CAMPOS_PAQUETE = { pesoG: 'paq-peso', largoCm: 'paq-largo', anchoCm: 'paq-ancho', altoCm: 'paq-alto' };
 const leerPaqueteApp = () => Object.fromEntries(Object.entries(CAMPOS_PAQUETE).map(([k, id]) => [k, $(id).value.trim()]));
@@ -1040,11 +1023,12 @@ $('precio').addEventListener('input', () => {
   try { el.setSelectionRange(pos, pos); } catch {}
   marcarPrecio();
 });
-
 /* ---------- costos y ganancia ---------- */
 
-/* Misma cuenta que calcularGanancia/precioDeEquilibrio de worker/logica.js (con tests en node test.mjs):
-   la app no importa del Worker, así que viven las dos. */
+/* >>> compartido
+   Funciones puras: son las mismas de worker/logica.js. La app no importa del Worker, así que viven
+   las dos, y `node test.mjs` carga este bloque tal cual y les corre los mismos casos a ambas.
+   Nada de DOM ni de estado acá adentro. */
 const positivo = v => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
 
 function calcularGanancia({ precio, comision, envio, costo }) {
@@ -1058,14 +1042,36 @@ function calcularGanancia({ precio, comision, envio, costo }) {
     margen: Math.round(((neto - k) / p) * 1000) / 10, comisionPct: Math.round((c / p) * 1000) / 10 };
 }
 
+/** El precio más bajo (a la centena, o al millar arriba de $50.000) con el que la ganancia no es negativa. Siempre redondea hacia arriba. */
 function precioDeEquilibrio({ costo, envio, pct, fijo }) {
   const k = positivo(costo) + positivo(envio) + positivo(fijo);
   const f = positivo(pct) / 100;
   if (!k || f >= 1) return 0;
   const v = k / (1 - f);
   const paso = v >= 50000 ? 1000 : 100;
-  return Math.max(paso, Math.round(v / paso) * paso);
+  return Math.ceil(v / paso - 1e-9) * paso;
 }
+
+/** "45 cm", "1,2 m", "800 mm" o "45" (sin unidad = cm) → centímetros enteros; null si no se entiende. */
+function aCentimetros(texto) {
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mm|cm|m|"|in|pulgadas?)?\s*$/i.exec(String(texto ?? ''));
+  if (!m) return null;
+  const n = Number(m[1].replace(',', '.'));
+  const u = (m[2] || 'cm').toLowerCase();
+  const cm = u === 'mm' ? n / 10 : u === 'm' ? n * 100 : /^(in|"|pulgada)/.test(u) ? n * 2.54 : n;
+  return cm > 0 ? Math.max(1, Math.round(cm)) : null;
+}
+
+/** "800 g", "1,5 kg", "2 lb" o "800" (sin unidad = g) → gramos enteros; null si no se entiende. */
+function aGramos(texto) {
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mg|g|kg|lb|oz)?\s*$/i.exec(String(texto ?? ''));
+  if (!m) return null;
+  const n = Number(m[1].replace(',', '.'));
+  const u = (m[2] || 'g').toLowerCase();
+  const g = u === 'mg' ? n / 1000 : u === 'kg' ? n * 1000 : u === 'lb' ? n * 453.592 : u === 'oz' ? n * 28.3495 : n;
+  return g > 0 ? Math.max(1, Math.round(g)) : null;
+}
+/* <<< compartido */
 
 /* Lo que cobra MercadoLibre por tipo de publicación, para el precio y la categoría de la última consulta. */
 const comisiones = { clave: '', precio: 0, tipos: [], disponible: null, motivo: '' };

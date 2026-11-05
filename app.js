@@ -177,6 +177,7 @@ function actualizarRed(sin = sinRed) {
   $('aviso-red').hidden = !sin;
   $('publicar').disabled = sin;
   $('analizar').disabled = sin || !estado.fotos.length;
+  pintarCola();
 }
 addEventListener('offline', () => actualizarRed(true));
 addEventListener('online', () => {
@@ -471,6 +472,7 @@ function dibujarFotos() {
     return d;
   }));
   $('analizar').disabled = sinRed || !estado.fotos.length;
+  pintarCola();
   $('zona-fotos').hidden = estado.fotos.length >= MAX_FOTOS;
   $('zona-fotos').querySelector('strong').textContent = estado.fotos.length ? 'Agregar más fotos' : 'Elegí o arrastrá tus fotos';
   $('zona-fotos').querySelector('span').textContent = estado.fotos.length
@@ -551,6 +553,125 @@ async function analizar() {
 }
 $('analizar').addEventListener('click', analizar);
 
+/* ---------- cola de varios productos ---------- */
+
+/* Se arma un grupo de fotos por producto, se suma a la cola y se arman de a uno (para no
+   saturar a Claude ni a MercadoLibre). Cada producto listo queda como un borrador normal
+   en el historial; la cola vive solo en esta pestaña y se usa para revisarlos en fila.
+   estado: pendiente → armando → lista | error. */
+const MAX_COLA = 10;
+const cola = [];
+let colaCorriendo = false;
+let colaNumero = 0;
+
+const sigueEnCola = () => cola.find(c => c.estado === 'lista' && !c.visto && c.id !== estado.registroId);
+
+function pintarCola() {
+  const n = cola.length;
+  const listas = cola.filter(c => c.estado === 'lista').length;
+  const faltan = cola.filter(c => c.estado === 'pendiente').length;
+  const fallaron = cola.filter(c => c.estado === 'error').length;
+  $('cola-sumar').disabled = sinRed || !estado.fotos.length || n >= MAX_COLA;
+  $('cola-armar').disabled = sinRed || colaCorriendo || !(faltan || fallaron);
+  $('cola-armar').textContent = colaCorriendo ? 'Armando…' : faltan ? (n > 1 ? `Armar ${faltan === 1 ? 'el que falta' : `los ${faltan}`}` : 'Armar') : fallaron ? 'Reintentar los que fallaron' : 'Armar todos';
+  $('cola-vaciar').hidden = !n || colaCorriendo;
+  $('lote-resumen').textContent = n ? `${listas} de ${n} listos` : 'cola vacía';
+
+  $('cola-lista').replaceChildren(...cola.map(c => {
+    const li = document.createElement('li');
+    li.dataset.estado = c.estado;
+    const img = document.createElement('img');
+    img.src = c.thumb;
+    img.alt = '';
+    const texto = document.createElement('div');
+    texto.className = 'cola-texto';
+    const t = document.createElement('strong');
+    t.textContent = c.titulo || `Producto ${c.numero}`;
+    const s = document.createElement('small');
+    s.textContent = { pendiente: `${c.fotos.length} ${c.fotos.length === 1 ? 'foto' : 'fotos'} · esperando`, armando: 'armando la publicación',
+      lista: c.visto ? 'lista · ya la abriste' : 'lista para revisar', error: c.error || 'no se pudo armar' }[c.estado];
+    texto.append(t, s);
+    li.append(img, texto);
+    if (c.estado === 'lista') li.append(botonFoto('Revisar', `Revisar ${c.titulo || `producto ${c.numero}`}`, 'boton secundario', () => abrirDeCola(c)));
+    else if (c.estado !== 'armando') li.append(botonFoto('✕', `Sacar el producto ${c.numero} de la cola`, 'enlace', () => sacarDeCola(c)));
+    return li;
+  }));
+
+  const sig = sigueEnCola();
+  const pendientesDeRevisar = cola.filter(c => c.estado === 'lista' && !c.visto && c.id !== estado.registroId).length;
+  $('cola-siguiente').hidden = !sig;
+  $('cola-siguiente').textContent = `Siguiente de la cola (${pendientesDeRevisar}) ›`;
+}
+
+async function sumarACola() {
+  if (!estado.fotos.length || cola.length >= MAX_COLA) return;
+  const fotos = estado.fotos.map(f => ({ dataUrl: f.dataUrl }));
+  const thumb = await escalar(fotos[0].dataUrl, LADO_THUMB, 0.7).then(m => m.dataUrl).catch(() => '');
+  cola.push({ numero: ++colaNumero, fotos, thumb, estado: 'pendiente' });
+  estado.fotos = [];
+  $('aviso-inicio').hidden = true;
+  dibujarFotos();
+  $('lote').open = true;
+}
+
+function sacarDeCola(c) {
+  const i = cola.indexOf(c);
+  if (i < 0 || c.estado === 'armando') return;
+  cola.splice(i, 1);
+  pintarCola();
+  toast('Sacado de la cola.', { accion: 'Deshacer', alAccion: () => { cola.splice(Math.min(i, cola.length), 0, c); pintarCola(); } });
+}
+
+function vaciarCola() {
+  if (colaCorriendo || !cola.length) return;
+  const copia = cola.splice(0);
+  pintarCola();
+  toast('Cola vaciada. Lo que ya estaba listo sigue como borrador en el historial.', { accion: 'Deshacer', alAccion: () => { cola.push(...copia); pintarCola(); } });
+}
+
+/** Arma la publicación de un producto de la cola y la deja guardada como borrador. */
+async function armarDeCola(c) {
+  c.estado = 'armando';
+  c.error = '';
+  pintarCola();
+  try {
+    const r = await api('/api/analizar', { fotos: c.fotos.map(f => f.dataUrl) });
+    const id = nuevoId();
+    await api(`/api/registros/${id}`, { fotos: c.fotos, thumb: c.thumb, analisis: r, estado: 'borrador' }, 'PUT');
+    Object.assign(c, { estado: 'lista', id, titulo: r.propuesta?.titulo || '' });
+  } catch (e) {
+    Object.assign(c, { estado: 'error', error: `No se pudo armar: ${e.message}` });
+  }
+  pintarCola();
+}
+
+/** De a uno, en orden. Lo que se sume mientras corre entra en la misma vuelta. */
+async function correrCola() {
+  if (colaCorriendo) return;
+  colaCorriendo = true;
+  for (const c of cola) if (c.estado === 'error') c.estado = 'pendiente';
+  pintarCola();
+  try {
+    for (let c = cola.find(x => x.estado === 'pendiente'); c; c = cola.find(x => x.estado === 'pendiente')) await armarDeCola(c);
+  } finally {
+    colaCorriendo = false;
+    pintarCola();
+  }
+  const listas = cola.filter(c => c.estado === 'lista').length;
+  const fallaron = cola.filter(c => c.estado === 'error').length;
+  toast(fallaron ? `${listas} listos, ${fallaron} con error: revisalos en la cola.` : `Listos los ${listas} de la cola.`);
+}
+
+function abrirDeCola(c) {
+  c.visto = true;
+  return abrirRegistro(c.id);
+}
+
+$('cola-sumar').addEventListener('click', sumarACola);
+$('cola-armar').addEventListener('click', correrCola);
+$('cola-vaciar').addEventListener('click', vaciarCola);
+$('cola-siguiente').addEventListener('click', () => { const c = sigueEnCola(); if (c) abrirDeCola(c); });
+
 /** La miniatura del historial sale de la portada. */
 const miniatura = () => escalar(estado.fotos[0].dataUrl, LADO_THUMB, 0.7).then(m => ({ thumb: m.dataUrl })).catch(() => ({}));
 
@@ -602,6 +723,7 @@ function mostrarRevision(r, guardada) {
   marcarChips();
   marcarMedidas();
   pintarCierre();
+  pintarCola();
   pantalla('revision');
 }
 
@@ -1966,7 +2088,7 @@ if (DEMO) {
   document.title = 'VendeloYa (demo)';
   // Ganchos para probar sin manos (solo en el demo).
   window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista, api, cargarHistorial, fotosCambiaron, lineaMedidas, armarRespaldo, aplicarTema,
-    hacerOtraIgual, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion };
+    hacerOtraIgual, cola, correrCola, sumarACola, pintarCola, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion };
 }
 dibujarFotos();
 refrescarCuenta();

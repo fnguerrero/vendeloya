@@ -719,3 +719,19 @@ dialog.config .titulo-seccion h2 { margin: 0; }
 .ganancia[data-signo="mas"] .total dd { color: var(--ok); }
 .ganancia[data-signo="menos"] .total dd { color: var(--error); }
 #grupo-ganancia .precio-input input { font-size: 1.1rem; padding: 8px 10px; }
+
+/* Cola de varios productos */
+.lote { margin-top: 16px; }
+.cola { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.cola li { display: flex; align-items: center; gap: 10px; background: var(--fondo); border-radius: var(--radio); padding: 8px; min-width: 0; }
+.cola img { width: 48px; height: 48px; object-fit: cover; border-radius: 6px; flex: none; }
+.cola .cola-texto { flex: 1; min-width: 0; font-size: .9rem; }
+.cola .cola-texto strong, .cola .cola-texto small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cola .cola-texto small { color: var(--suave); }
+.cola li[data-estado="lista"] .cola-texto small { color: var(--ok); font-weight: 600; }
+.cola li[data-estado="error"] .cola-texto small { color: var(--error); white-space: normal; }
+.cola li[data-estado="armando"] .cola-texto small::after { content: "…"; }
+.cola button { flex: none; }
+.cola-acciones { display: flex; align-items: center; gap: 14px; margin-top: 10px; }
+.cola-acciones .boton { flex: 1; }
+.titulo-seccion #cola-siguiente { margin-left: auto; white-space: nowrap; }

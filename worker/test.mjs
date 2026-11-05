@@ -8,7 +8,7 @@ import {
   armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice, aplicarDefaults,
   estadoPublicacion, armarSeguimiento, cambioPublicacion, validarRespuesta, elegirParecidos,
   leerComisiones, calcularGanancia, precioDeEquilibrio,
-  leerPaquete, paqueteParaML, aCentimetros, aGramos
+  leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -288,10 +288,10 @@ test('leerComisiones: null, "" o ausente es "no informado", nunca 0 (ni comisió
 const fuenteApp = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const bloqueCompartido = /\/\* >>> compartido([\s\S]*?)\/\* <<< compartido \*\//.exec(fuenteApp)?.[1];
 assert.ok(bloqueCompartido, 'app.js no tiene el bloque ">>> compartido"');
-const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision'];
+const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete'];
 const front = new Function(`${bloqueCompartido.slice(bloqueCompartido.indexOf('*/') + 2)}\nreturn { ${NOMBRES_COMPARTIDOS.join(', ')} };`)();
 const IMPLEMENTACIONES = {
-  worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos },
+  worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete },
   front
 };
 const enAmbas = (nombre, fn) => test(nombre, () => { for (const [donde, impl] of Object.entries(IMPLEMENTACIONES)) { try { fn(impl); } catch (e) { e.message = `[${donde}] ${e.message}`; throw e; } } });
@@ -394,6 +394,71 @@ test('resolverComision (front): nunca asume $0; sin dato o sin ese tipo pide car
   assert.deepEqual(resolverComision({ ...base, disponible: null, tipos: [], tipoId: 'gold_special' }), { fuente: 'ninguna', motivo: 'actualizando' });
 });
 
+enAmbas('parsearNumero: es-AR (coma decimal, punto de miles) y rechazo de lo ambiguo (worker y front)', ({ parsearNumero }) => {
+  const casos = { '1.500': 1500, '1,5': 1.5, '1.250,50': 1250.5, '99,90': 99.9, '1500': 1500, '1.5': 1.5, '1234.56': 1234.56,
+    '12.500': 12500, '1.234.567,8': 1234567.8, '0,5': 0.5, '-500': -500, ' 250 ': 250, 12.5: 12.5 };
+  for (const [entrada, esperado] of Object.entries(casos)) assert.equal(parsearNumero(entrada), esperado, `"${entrada}"`);
+  assert.equal(parsearNumero(15), 15);
+  for (const malo of ['1e9', '0x10', 'abc', '', ' ', '1.2.3', '1,2,3', '1.2,3.4', '12,', ',5', '+5', '1 500', '١٢', '--5', '1_000', null, undefined, '99.999.999.999e3'])
+    assert.ok(Number.isNaN(parsearNumero(malo)), `debería ser NaN: ${JSON.stringify(malo)}`);
+});
+
+enAmbas('parsearMonto: decimales es-AR bien leídos; negativo, ilegible o enorme = error y 0 (worker y front)', ({ parsearMonto }) => {
+  assert.deepEqual(parsearMonto('99,90'), { valor: 99.9, error: '' });          // antes: 9.990
+  assert.deepEqual(parsearMonto('1.250,50'), { valor: 1250.5, error: '' });     // antes: 125.050
+  assert.deepEqual(parsearMonto('12.500'), { valor: 12500, error: '' });
+  assert.deepEqual(parsearMonto(''), { valor: 0, error: '' });
+  assert.deepEqual(parsearMonto('   '), { valor: 0, error: '' });
+  for (const malo of ['-500', '1e9', '0x10', 'mil', '1.2.3', '99999999999']) {
+    const r = parsearMonto(malo);
+    assert.equal(r.valor, 0, malo);
+    assert.ok(r.error.length > 5, `sin mensaje para ${malo}`);
+  }
+  assert.match(parsearMonto('-500').error, /negativo/);                         // antes: quedaba en 500
+});
+
+enAmbas('validarPaquete: peso en g enteros, medidas en cm, rango razonable y mensajes claros (worker y front)', ({ validarPaquete }) => {
+  const ok = validarPaquete({ pesoG: '1.500', largoCm: '40', anchoCm: '30,4', altoCm: 15 });
+  assert.deepEqual(ok, { ok: true, valores: { pesoG: 1500, largoCm: 40, anchoCm: 30, altoCm: 15 }, errores: [] });   // '1.500' era 2 g
+  const base = { pesoG: '1500', largoCm: '40', anchoCm: '30', altoCm: '15' };
+  const mal = (cambio, patron) => {
+    const r = validarPaquete({ ...base, ...cambio });
+    assert.equal(r.ok, false, JSON.stringify(cambio));
+    assert.equal(r.valores, null);
+    assert.match(r.errores.join(' '), patron, JSON.stringify(cambio));
+  };
+  mal({ pesoG: '1,5' }, /sin decimales/);                  // antes: 2 g
+  mal({ pesoG: '99.999.999.999' }, /entre 1 g y 100\.000 g/);
+  mal({ pesoG: '1e9' }, /no es un número/);
+  mal({ pesoG: '0x10' }, /no es un número/);
+  mal({ pesoG: '0' }, /entre 1 g/);
+  mal({ pesoG: '-5' }, /entre 1 g/);
+  mal({ pesoG: '100001' }, /entre 1 g/);
+  assert.equal(validarPaquete({ ...base, pesoG: '100000' }).ok, true);
+  mal({ largoCm: '301' }, /El largo tiene que estar entre 1 y 300 cm/);
+  mal({ anchoCm: '0,2' }, /El ancho tiene que estar entre 1/);
+  mal({ altoCm: 'alto' }, /El alto no es un número/);
+  mal({ altoCm: '' }, /Falta el alto/);
+  assert.equal(validarPaquete({ ...base, largoCm: '300' }).ok, true);
+  assert.equal(validarPaquete({ ...base, largoCm: '0,5' }).valores.largoCm, 1);
+  assert.deepEqual(validarPaquete(undefined).errores, ['Cargá el peso y las medidas del paquete.']);
+  assert.deepEqual(validarPaquete({ pesoG: '', largoCm: '', anchoCm: '', altoCm: '' }).errores, ['Cargá el peso y las medidas del paquete.']);
+});
+
+test('armarItem y faltantes: un paquete fuera de rango nunca llega a /items/validate (me2 ni cuenta)', () => {
+  const malos = [{ pesoG: '99.999.999.999' }, { pesoG: '1e9' }, { pesoG: '0x10' }, { pesoG: '1,5' }, { largoCm: '9999' }];
+  for (const cambio of malos) {
+    const p = { titulo: 'Taladro', categoria: 'MLA5232', precio: 45000, condicion: 'usado', fotos: ['p1'], atributos: [], paquete: { pesoG: '1500', largoCm: '40', anchoCm: '30', altoCm: '15', ...cambio } };
+    for (const envio of ['me2', '']) {
+      assert.match(faltantes({ ...p, envio }).join(' '), /el paquete de envío/, `${envio}:${JSON.stringify(cambio)}`);
+      const item = armarItem({ ...p, envio }, { userProducts: true });
+      assert.ok(!item.attributes.some(a => a.id.startsWith('SELLER_PACKAGE')), 'no debe mandar un paquete inválido');
+      assert.equal(item.shipping?.dimensions, undefined);
+    }
+    assert.deepEqual(faltantes({ ...p, envio: 'retiro' }), []);
+  }
+});
+
 const PAQ = { pesoG: '1500', largoCm: '40', anchoCm: '30,4', altoCm: 15 };
 const BASE = { titulo: 'Taladro', categoria: 'MLA5232', precio: 45000, condicion: 'usado', fotos: ['p1'], atributos: [] };
 
@@ -427,6 +492,10 @@ enAmbas('aCentimetros y aGramos: convierten lo que escribió la IA o Nico (worke
   assert.equal(aGramos('2 lb'), 907);
   assert.equal(aGramos('500'), 500);
   assert.equal(aGramos('pesado'), null);
+  assert.equal(aCentimetros('1.200 mm'), 120);   // el punto es de miles (antes se leía como 1,2 mm)
+  assert.equal(aGramos('1.500 g'), 1500);
+  assert.equal(aCentimetros('1e9'), null);
+  assert.equal(aGramos('0x10'), null);
 });
 
 test('armarItem: Mercado Envíos (me2) lleva peso y medidas, gratis y retiro', () => {
@@ -448,7 +517,7 @@ test('armarItem: retiro no lleva paquete; la configuración de la cuenta solo su
 });
 
 test('faltantes: con Mercado Envíos el paquete es obligatorio; con retiro o cuenta, no', () => {
-  assert.deepEqual(faltantes({ ...BASE, envio: 'me2' }), ['el peso y las medidas del paquete (Mercado Envíos)']);
+  assert.deepEqual(faltantes({ ...BASE, envio: 'me2' }), ['el paquete de envío (Cargá el peso y las medidas del paquete.)']);
   assert.deepEqual(faltantes({ ...BASE, envio: 'me2', paquete: PAQ }), []);
   assert.deepEqual(faltantes({ ...BASE, envio: 'retiro' }), []);
   assert.deepEqual(faltantes({ ...BASE, envio: '' }), []);

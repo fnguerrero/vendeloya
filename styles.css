@@ -744,3 +744,4 @@ dialog.config .titulo-seccion h2 { margin: 0; }
 .paquete-opciones { display: grid; gap: 6px; margin-top: 10px; }
 .casilla { display: flex; align-items: center; gap: 8px; font-size: .9rem; font-weight: 600; }
 .casilla input { width: auto; margin: 0; }
+.error-campo { color: var(--error); font-size: .85rem; font-weight: 600; margin: 6px 0 0; }

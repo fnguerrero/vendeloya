@@ -698,8 +698,9 @@ function mostrarRevision(r, guardada) {
   $('garantia').value = p.garantia || '';
   $('envio').value = p.envio ?? 'retiro';
   $('cantidad').value = p.cantidad || 1;
-  $('costo').value = miles(p.costo);
-  $('costo-envio').value = miles(p.costoEnvio);
+  $('costo').value = montoTexto(p.costo);
+  $('costo-envio').value = montoTexto(p.costoEnvio);
+  avisarMontos();
   $('comision-manual').value = p.comisionManual || '';
   for (const [k, id] of Object.entries(CAMPOS_PAQUETE)) $(id).value = p.paquete?.[k] ?? '';
   $('envio-gratis').checked = !!p.envioGratis;
@@ -906,7 +907,8 @@ function resumirVenta() {
 
 const CAMPOS_PAQUETE = { pesoG: 'paq-peso', largoCm: 'paq-largo', anchoCm: 'paq-ancho', altoCm: 'paq-alto' };
 const leerPaqueteApp = () => Object.fromEntries(Object.entries(CAMPOS_PAQUETE).map(([k, id]) => [k, $(id).value.trim()]));
-const paqueteCompleto = () => Object.values(leerPaqueteApp()).every(v => Number(String(v).replace(',', '.')) > 0);
+const validacionPaquete = () => validarPaquete(leerPaqueteApp());
+const paqueteCompleto = () => validacionPaquete().ok;
 
 /** Las medidas del producto que ya están cargadas en los datos, convertidas a g y cm. */
 function medidasDelProducto() {
@@ -926,6 +928,11 @@ function pintarPaquete() {
   $('paq-opciones').hidden = envio !== 'me2';
   const m = medidasDelProducto();
   $('paq-copiar').hidden = envio === 'retiro' || !Object.entries(m).some(([k, v]) => v && !$(CAMPOS_PAQUETE[k]).value.trim());
+  // Se avisa apenas escribió algo que no pasa la cordura (no antes: vacío es "todavía no cargó").
+  const escribio = Object.values(leerPaqueteApp()).some(v => v !== '');
+  const v = validacionPaquete();
+  $('paq-error').hidden = envio === 'retiro' || !escribio || v.ok;
+  $('paq-error').textContent = v.errores.join(' ');
 }
 $('paq-copiar').addEventListener('click', () => {
   const m = medidasDelProducto();
@@ -1052,24 +1059,82 @@ function precioDeEquilibrio({ costo, envio, pct, fijo }) {
   return Math.ceil(v / paso - 1e-9) * paso;
 }
 
+/* Topes de cordura para detectar errores de tipeo (1500 vs 1.5 vs 1e9). NO son reglas de MercadoLibre. */
+const MAX_PESO_G = 100000;   // 100 kg
+const MAX_MEDIDA_CM = 300;
+const MAX_MONTO = 1e9;
+
+/**
+ * Un número escrito a la argentina: coma decimal y punto de miles ("1.250,50", "99,90", "1.500"), o punto
+ * decimal ("1234.56"). Cualquier otra cosa (letras, notación científica, hexa, signo +, separadores
+ * mezclados) es NaN: nunca se adivina. "1.500" es mil quinientos; "1.5", uno coma cinco.
+ */
+function parsearNumero(texto) {
+  const t = String(texto ?? '').trim();
+  let m;
+  if ((m = /^(-?)(\d{1,3}(?:\.\d{3})+)(?:,(\d+))?$/.exec(t))) return Number(`${m[1]}${m[2].replace(/\./g, '')}${m[3] ? `.${m[3]}` : ''}`);
+  if ((m = /^(-?)(\d+)(?:,(\d+))?$/.exec(t))) return Number(`${m[1]}${m[2]}${m[3] ? `.${m[3]}` : ''}`);
+  if ((m = /^(-?)(\d+\.\d+)$/.exec(t))) return Number(m[1] + m[2]);
+  return NaN;
+}
+
+/** Un monto en pesos escrito a mano. Vacío = 0 sin error; negativo, ilegible o enorme = error (valor 0). */
+function parsearMonto(texto) {
+  const t = String(texto ?? '').trim();
+  if (t === '') return { valor: 0, error: '' };
+  const v = parsearNumero(t);
+  if (!Number.isFinite(v)) return { valor: 0, error: 'Escribí un monto válido, por ejemplo 12.500 o 12.500,50.' };
+  if (v < 0) return { valor: 0, error: 'El monto no puede ser negativo.' };
+  if (v > MAX_MONTO) return { valor: 0, error: 'Ese monto es demasiado grande: revisalo.' };
+  return { valor: v, error: '' };
+}
+
+/**
+ * Peso (g) y medidas (cm) del paquete tal como se escribieron → { ok, valores, errores }.
+ * El peso va en gramos enteros; las medidas se redondean al cm. Todo con rango razonable.
+ */
+function validarPaquete(paquete) {
+  const campos = [['pesoG', 'el peso'], ['largoCm', 'el largo'], ['anchoCm', 'el ancho'], ['altoCm', 'el alto']];
+  const vacio = v => String(v ?? '').trim() === '';
+  if (!paquete || campos.every(([k]) => vacio(paquete[k]))) return { ok: false, valores: null, errores: ['Cargá el peso y las medidas del paquete.'] };
+  const valores = {};
+  const errores = [];
+  for (const [k, nombre] of campos) {
+    if (vacio(paquete[k])) { errores.push(`Falta ${nombre}.`); continue; }
+    const Nombre = nombre[0].toUpperCase() + nombre.slice(1);
+    const v = parsearNumero(paquete[k]);
+    if (!Number.isFinite(v)) { errores.push(`${Nombre} no es un número válido (por ejemplo 1500 o 30,5).`); continue; }
+    if (k === 'pesoG') {
+      if (!Number.isInteger(v)) errores.push('El peso va en gramos y sin decimales (1,5 kg se escribe 1500).');
+      else if (v < 1 || v > MAX_PESO_G) errores.push('El peso tiene que estar entre 1 g y 100.000 g (100 kg).');
+      else valores[k] = v;
+      continue;
+    }
+    const r = Math.round(v);
+    if (r < 1 || r > MAX_MEDIDA_CM) errores.push(`${Nombre} tiene que estar entre 1 y 300 cm.`);
+    else valores[k] = r;
+  }
+  return errores.length ? { ok: false, valores: null, errores } : { ok: true, valores, errores: [] };
+}
+
 /** "45 cm", "1,2 m", "800 mm" o "45" (sin unidad = cm) → centímetros enteros; null si no se entiende. */
 function aCentimetros(texto) {
-  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mm|cm|m|"|in|pulgadas?)?\s*$/i.exec(String(texto ?? ''));
-  if (!m) return null;
-  const n = Number(m[1].replace(',', '.'));
+  const m = /^\s*([\d.,]+)\s*(mm|cm|m|"|in|pulgadas?)?\s*$/i.exec(String(texto ?? ''));
+  const n = m ? parsearNumero(m[1]) : NaN;
+  if (!(n > 0)) return null;
   const u = (m[2] || 'cm').toLowerCase();
   const cm = u === 'mm' ? n / 10 : u === 'm' ? n * 100 : /^(in|"|pulgada)/.test(u) ? n * 2.54 : n;
-  return cm > 0 ? Math.max(1, Math.round(cm)) : null;
+  return Math.max(1, Math.round(cm));
 }
 
 /** "800 g", "1,5 kg", "2 lb" o "800" (sin unidad = g) → gramos enteros; null si no se entiende. */
 function aGramos(texto) {
-  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mg|g|kg|lb|oz)?\s*$/i.exec(String(texto ?? ''));
-  if (!m) return null;
-  const n = Number(m[1].replace(',', '.'));
+  const m = /^\s*([\d.,]+)\s*(mg|g|kg|lb|oz)?\s*$/i.exec(String(texto ?? ''));
+  const n = m ? parsearNumero(m[1]) : NaN;
+  if (!(n > 0)) return null;
   const u = (m[2] || 'g').toLowerCase();
   const g = u === 'mg' ? n / 1000 : u === 'kg' ? n * 1000 : u === 'lb' ? n * 453.592 : u === 'oz' ? n * 28.3495 : n;
-  return g > 0 ? Math.max(1, Math.round(g)) : null;
+  return Math.max(1, Math.round(g));
 }
 
 /**
@@ -1170,10 +1235,23 @@ function pintarGanancia() {
   }
 }
 
-/* Los montos se tipean con puntos de miles, igual que el precio. */
-const valorDinero = id => Number(String($(id).value).replace(/\D/g, '')) || 0;
+/* Los montos se tipean a la argentina ("12.500", "99,90", "1.250,50"). Si el texto no se entiende o es
+   negativo se avisa debajo del campo y vale 0: no se adivina. */
+function montoDe(id) { return parsearMonto($(id).value); }
+const valorDinero = id => montoDe(id).valor;
+/** Un monto para mostrar: entero con puntos de miles; con centavos solo si los tiene. */
+const montoTexto = v => (Number(v) > 0 ? Number(v).toLocaleString('es-AR', { maximumFractionDigits: 2 }) : '');
+function avisarMontos() {
+  const errores = ['costo', 'costo-envio'].map(id => montoDe(id).error).filter(Boolean);
+  $('costo-error').hidden = !errores.length;
+  $('costo-error').textContent = errores[0] || '';
+}
 for (const id of ['costo', 'costo-envio']) {
-  $(id).addEventListener('input', () => { $(id).value = miles(valorDinero(id)); });
+  $(id).addEventListener('input', () => {
+    // Solo se agrupan los miles mientras es un entero pelado; con coma o puntos ya escritos se respeta lo tipeado.
+    if (/^\d+$/.test($(id).value.trim())) $(id).value = miles($(id).value.trim());
+    avisarMontos();
+  });
 }
 
 /* ---------- lo que vio la IA (columna derecha) ---------- */
@@ -1320,7 +1398,7 @@ function pendientes() {
     { ok: !faltan.length, texto: faltan.length ? `Falta${faltan.length > 1 ? 'n' : ''} ${faltan.length} dato${faltan.length > 1 ? 's' : ''} obligatorio${faltan.length > 1 ? 's' : ''}` : 'Datos obligatorios', el: faltan[0] }
   ];
   // Mercado Envíos calcula el costo con el peso y las medidas: sin ellos no se puede publicar así.
-  if ($('envio').value === 'me2') items.push({ ok: paqueteCompleto(), texto: paqueteCompleto() ? 'Peso y medidas del paquete' : 'Falta el peso y las medidas del paquete', el: $('paq-peso') });
+  if ($('envio').value === 'me2') { const v = validacionPaquete(); items.push({ ok: v.ok, texto: v.ok ? 'Peso y medidas del paquete' : `Paquete: ${v.errores[0]}`, el: $('paq-peso') }); }
   // MercadoLibre rechaza los datos de contacto: se avisa antes y frena el Publicar.
   for (const [id, donde] of [['titulo', 'del título'], ['descripcion', 'de la descripción']]) {
     const que = contacto($(id).value);
@@ -1400,6 +1478,7 @@ function tocado(e) {
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
   if (['envio', 'cantidad', 'tipo'].includes(e?.target?.id)) resumirVenta();
+  if (String(e?.target?.id || '').startsWith('paq-')) pintarPaquete();
   pintarGanancia();
   if (['precio', 'tipo'].includes(e?.target?.id)) pedirComisiones();
   $('resultado-revision').hidden = true;

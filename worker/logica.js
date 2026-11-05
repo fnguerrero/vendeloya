@@ -98,20 +98,87 @@ export function limpiarDescripcion(texto) {
 
 const MEDIDA_PAQUETE = { pesoG: 'SELLER_PACKAGE_WEIGHT', largoCm: 'SELLER_PACKAGE_LENGTH', anchoCm: 'SELLER_PACKAGE_WIDTH', altoCm: 'SELLER_PACKAGE_HEIGHT' };
 
+/* Topes de cordura para detectar errores de tipeo (1500 vs 1.5 vs 1e9). NO son reglas de MercadoLibre. */
+const MAX_PESO_G = 100000;   // 100 kg
+const MAX_MEDIDA_CM = 300;
+const MAX_MONTO = 1e9;
+
 /**
- * Peso (gramos) y medidas (cm) del paquete tal como las cargó Nico → número entero
- * por cada una, o null si falta alguna o no es un número mayor a cero. Los
- * atributos SELLER_PACKAGE_* de MercadoLibre solo aceptan g y cm.
+ * Un número escrito a la argentina: coma decimal y punto de miles ("1.250,50", "99,90", "1.500"), o punto
+ * decimal ("1234.56"). Cualquier otra cosa (letras, notación científica, hexa, signo +, separadores
+ * mezclados) es NaN: nunca se adivina. "1.500" es mil quinientos; "1.5", uno coma cinco.
  */
-export function leerPaquete(paquete) {
-  if (!paquete) return null;
-  const v = {};
-  for (const k of Object.keys(MEDIDA_PAQUETE)) {
-    const n = Math.round(Number(String(paquete[k] ?? '').replace(',', '.')));
-    if (!Number.isFinite(n) || n <= 0) return null;
-    v[k] = n;
+export function parsearNumero(texto) {
+  const t = String(texto ?? '').trim();
+  let m;
+  if ((m = /^(-?)(\d{1,3}(?:\.\d{3})+)(?:,(\d+))?$/.exec(t))) return Number(`${m[1]}${m[2].replace(/\./g, '')}${m[3] ? `.${m[3]}` : ''}`);
+  if ((m = /^(-?)(\d+)(?:,(\d+))?$/.exec(t))) return Number(`${m[1]}${m[2]}${m[3] ? `.${m[3]}` : ''}`);
+  if ((m = /^(-?)(\d+\.\d+)$/.exec(t))) return Number(m[1] + m[2]);
+  return NaN;
+}
+
+/** Un monto en pesos escrito a mano. Vacío = 0 sin error; negativo, ilegible o enorme = error (valor 0). */
+export function parsearMonto(texto) {
+  const t = String(texto ?? '').trim();
+  if (t === '') return { valor: 0, error: '' };
+  const v = parsearNumero(t);
+  if (!Number.isFinite(v)) return { valor: 0, error: 'Escribí un monto válido, por ejemplo 12.500 o 12.500,50.' };
+  if (v < 0) return { valor: 0, error: 'El monto no puede ser negativo.' };
+  if (v > MAX_MONTO) return { valor: 0, error: 'Ese monto es demasiado grande: revisalo.' };
+  return { valor: v, error: '' };
+}
+
+/**
+ * Peso (g) y medidas (cm) del paquete tal como se escribieron → { ok, valores, errores }.
+ * El peso va en gramos enteros; las medidas se redondean al cm. Todo con rango razonable.
+ */
+export function validarPaquete(paquete) {
+  const campos = [['pesoG', 'el peso'], ['largoCm', 'el largo'], ['anchoCm', 'el ancho'], ['altoCm', 'el alto']];
+  const vacio = v => String(v ?? '').trim() === '';
+  if (!paquete || campos.every(([k]) => vacio(paquete[k]))) return { ok: false, valores: null, errores: ['Cargá el peso y las medidas del paquete.'] };
+  const valores = {};
+  const errores = [];
+  for (const [k, nombre] of campos) {
+    if (vacio(paquete[k])) { errores.push(`Falta ${nombre}.`); continue; }
+    const Nombre = nombre[0].toUpperCase() + nombre.slice(1);
+    const v = parsearNumero(paquete[k]);
+    if (!Number.isFinite(v)) { errores.push(`${Nombre} no es un número válido (por ejemplo 1500 o 30,5).`); continue; }
+    if (k === 'pesoG') {
+      if (!Number.isInteger(v)) errores.push('El peso va en gramos y sin decimales (1,5 kg se escribe 1500).');
+      else if (v < 1 || v > MAX_PESO_G) errores.push('El peso tiene que estar entre 1 g y 100.000 g (100 kg).');
+      else valores[k] = v;
+      continue;
+    }
+    const r = Math.round(v);
+    if (r < 1 || r > MAX_MEDIDA_CM) errores.push(`${Nombre} tiene que estar entre 1 y 300 cm.`);
+    else valores[k] = r;
   }
-  return v;
+  return errores.length ? { ok: false, valores: null, errores } : { ok: true, valores, errores: [] };
+}
+
+/** "45 cm", "1,2 m", "800 mm" o "45" (sin unidad = cm) → centímetros enteros; null si no se entiende. */
+export function aCentimetros(texto) {
+  const m = /^\s*([\d.,]+)\s*(mm|cm|m|"|in|pulgadas?)?\s*$/i.exec(String(texto ?? ''));
+  const n = m ? parsearNumero(m[1]) : NaN;
+  if (!(n > 0)) return null;
+  const u = (m[2] || 'cm').toLowerCase();
+  const cm = u === 'mm' ? n / 10 : u === 'm' ? n * 100 : /^(in|"|pulgada)/.test(u) ? n * 2.54 : n;
+  return Math.max(1, Math.round(cm));
+}
+
+/** "800 g", "1,5 kg", "2 lb" o "800" (sin unidad = g) → gramos enteros; null si no se entiende. */
+export function aGramos(texto) {
+  const m = /^\s*([\d.,]+)\s*(mg|g|kg|lb|oz)?\s*$/i.exec(String(texto ?? ''));
+  const n = m ? parsearNumero(m[1]) : NaN;
+  if (!(n > 0)) return null;
+  const u = (m[2] || 'g').toLowerCase();
+  const g = u === 'mg' ? n / 1000 : u === 'kg' ? n * 1000 : u === 'lb' ? n * 453.592 : u === 'oz' ? n * 28.3495 : n;
+  return Math.max(1, Math.round(g));
+}
+
+/** Los cuatro valores ya validados (g y cm enteros), o null si falta alguno o no pasa la cordura. */
+export function leerPaquete(paquete) {
+  return validarPaquete(paquete).valores;
 }
 
 /**
@@ -128,26 +195,6 @@ export function paqueteParaML(paquete, { userProducts }) {
         { id: MEDIDA_PAQUETE.anchoCm, value_name: `${p.anchoCm} cm` },
         { id: MEDIDA_PAQUETE.altoCm, value_name: `${p.altoCm} cm` }] }
     : { dimensions: `${p.altoCm}x${p.anchoCm}x${p.largoCm},${p.pesoG}` };
-}
-
-/** "45 cm", "1,2 m", "800 mm" o "45" (sin unidad = cm) → centímetros enteros; null si no se entiende. */
-export function aCentimetros(texto) {
-  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mm|cm|m|"|in|pulgadas?)?\s*$/i.exec(String(texto ?? ''));
-  if (!m) return null;
-  const n = Number(m[1].replace(',', '.'));
-  const u = (m[2] || 'cm').toLowerCase();
-  const cm = u === 'mm' ? n / 10 : u === 'm' ? n * 100 : /^(in|"|pulgada)/.test(u) ? n * 2.54 : n;
-  return cm > 0 ? Math.max(1, Math.round(cm)) : null;
-}
-
-/** "800 g", "1,5 kg", "2 lb" o "800" (sin unidad = g) → gramos enteros; null si no se entiende. */
-export function aGramos(texto) {
-  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mg|g|kg|lb|oz)?\s*$/i.exec(String(texto ?? ''));
-  if (!m) return null;
-  const n = Number(m[1].replace(',', '.'));
-  const u = (m[2] || 'g').toLowerCase();
-  const g = u === 'mg' ? n / 1000 : u === 'kg' ? n * 1000 : u === 'lb' ? n * 453.592 : u === 'oz' ? n * 28.3495 : n;
-  return g > 0 ? Math.max(1, Math.round(g)) : null;
 }
 
 /**
@@ -425,7 +472,11 @@ export function faltantes(p) {
   if (!p.categoria) f.push('la categoría');
   if (!(Number(p.precio) > 0)) f.push('el precio');
   if (!(p.fotos || []).length) f.push('al menos una foto');
-  if (p.envio === 'me2' && !leerPaquete(p.paquete)) f.push('el peso y las medidas del paquete (Mercado Envíos)');
+  if (p.envio !== 'retiro') {
+    const escribioAlgo = p.paquete && Object.values(p.paquete).some(v => String(v ?? '').trim() !== '');
+    const v = validarPaquete(p.paquete);
+    if ((p.envio === 'me2' || escribioAlgo) && !v.ok) f.push(`el paquete de envío (${v.errores.join(' ')})`);
+  }
   for (const a of p.atributos || []) {
     if (a.requerido && !String(a.valor ?? '').trim()) f.push(a.nombre);
   }

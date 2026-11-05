@@ -94,6 +94,62 @@ export function limpiarDescripcion(texto) {
     .trim();
 }
 
+/* ---------- envío: peso y medidas del paquete ---------- */
+
+const MEDIDA_PAQUETE = { pesoG: 'SELLER_PACKAGE_WEIGHT', largoCm: 'SELLER_PACKAGE_LENGTH', anchoCm: 'SELLER_PACKAGE_WIDTH', altoCm: 'SELLER_PACKAGE_HEIGHT' };
+
+/**
+ * Peso (gramos) y medidas (cm) del paquete tal como las cargó Nico → número entero
+ * por cada una, o null si falta alguna o no es un número mayor a cero. Los
+ * atributos SELLER_PACKAGE_* de MercadoLibre solo aceptan g y cm.
+ */
+export function leerPaquete(paquete) {
+  if (!paquete) return null;
+  const v = {};
+  for (const k of Object.keys(MEDIDA_PAQUETE)) {
+    const n = Math.round(Number(String(paquete[k] ?? '').replace(',', '.')));
+    if (!Number.isFinite(n) || n <= 0) return null;
+    v[k] = n;
+  }
+  return v;
+}
+
+/**
+ * Cómo se declara el paquete en el ítem. Las cuentas con User Products lo mandan como
+ * atributos SELLER_PACKAGE_*; las anteriores, en shipping.dimensions ("AltoxAnchoxLargo,pesoEnGramos").
+ */
+export function paqueteParaML(paquete, { userProducts }) {
+  const p = leerPaquete(paquete);
+  if (!p) return null;
+  return userProducts
+    ? { atributos: [
+        { id: MEDIDA_PAQUETE.pesoG, value_name: `${p.pesoG} g` },
+        { id: MEDIDA_PAQUETE.largoCm, value_name: `${p.largoCm} cm` },
+        { id: MEDIDA_PAQUETE.anchoCm, value_name: `${p.anchoCm} cm` },
+        { id: MEDIDA_PAQUETE.altoCm, value_name: `${p.altoCm} cm` }] }
+    : { dimensions: `${p.altoCm}x${p.anchoCm}x${p.largoCm},${p.pesoG}` };
+}
+
+/** "45 cm", "1,2 m", "800 mm" o "45" (sin unidad = cm) → centímetros enteros; null si no se entiende. */
+export function aCentimetros(texto) {
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mm|cm|m|"|in|pulgadas?)?\s*$/i.exec(String(texto ?? ''));
+  if (!m) return null;
+  const n = Number(m[1].replace(',', '.'));
+  const u = (m[2] || 'cm').toLowerCase();
+  const cm = u === 'mm' ? n / 10 : u === 'm' ? n * 100 : /^(in|"|pulgada)/.test(u) ? n * 2.54 : n;
+  return cm > 0 ? Math.max(1, Math.round(cm)) : null;
+}
+
+/** "800 g", "1,5 kg", "2 lb" o "800" (sin unidad = g) → gramos enteros; null si no se entiende. */
+export function aGramos(texto) {
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mg|g|kg|lb|oz)?\s*$/i.exec(String(texto ?? ''));
+  if (!m) return null;
+  const n = Number(m[1].replace(',', '.'));
+  const u = (m[2] || 'g').toLowerCase();
+  const g = u === 'mg' ? n / 1000 : u === 'kg' ? n * 1000 : u === 'lb' ? n * 453.592 : u === 'oz' ? n * 28.3495 : n;
+  return g > 0 ? Math.max(1, Math.round(g)) : null;
+}
+
 /**
  * El cuerpo de POST /items (y de /items/validate, que es el mismo).
  *
@@ -135,6 +191,16 @@ export function armarItem(p, { userProducts }) {
   // Muebles y cosas grandes: sin Mercado Envíos, se retira en persona.
   if (p.envio === 'retiro') {
     item.shipping = { mode: 'not_specified', local_pick_up: true, free_shipping: false };
+  } else {
+    // Con envío: peso y medidas del paquete (si se cargaron) para que MercadoLibre calcule el costo.
+    const paquete = paqueteParaML(p.paquete, { userProducts });
+    if (paquete?.atributos) item.attributes.push(...paquete.atributos);
+    if (p.envio === 'me2') {
+      item.shipping = { mode: 'me2', local_pick_up: !!p.retiroTambien, free_shipping: !!p.envioGratis };
+      if (paquete?.dimensions) item.shipping.dimensions = paquete.dimensions;
+    } else if (paquete?.dimensions) {
+      item.shipping = { dimensions: paquete.dimensions };
+    }
   }
 
   if (p.garantia) {
@@ -350,6 +416,7 @@ export function faltantes(p) {
   if (!p.categoria) f.push('la categoría');
   if (!(Number(p.precio) > 0)) f.push('el precio');
   if (!(p.fotos || []).length) f.push('al menos una foto');
+  if (p.envio === 'me2' && !leerPaquete(p.paquete)) f.push('el peso y las medidas del paquete (Mercado Envíos)');
   for (const a of p.atributos || []) {
     if (a.requerido && !String(a.valor ?? '').trim()) f.push(a.nombre);
   }

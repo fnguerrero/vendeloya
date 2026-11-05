@@ -701,6 +701,9 @@ function mostrarRevision(r, guardada) {
   $('costo').value = miles(p.costo);
   $('costo-envio').value = miles(p.costoEnvio);
   $('comision-manual').value = p.comisionManual || '';
+  for (const [k, id] of Object.entries(CAMPOS_PAQUETE)) $(id).value = p.paquete?.[k] ?? '';
+  $('envio-gratis').checked = !!p.envioGratis;
+  $('retiro-tambien').checked = !!p.retiroTambien;
 
   const categoria = guardada?.categoriaDatos || r.categoria;
   const categorias = r.categorias.some(c => c.id === categoria.id)
@@ -892,10 +895,60 @@ for (const b of document.querySelectorAll('.volver-ia')) {
 
 /** Lo que se ve con el grupo "Envío y venta" cerrado. */
 function resumirVenta() {
-  const envio = $('envio').value === 'retiro' ? 'Retiro en persona' : 'Envío de la cuenta';
+  const envio = { retiro: 'Retiro en persona', me2: 'Mercado Envíos' }[$('envio').value] || 'Envío de la cuenta';
   const tipo = $('tipo').selectedOptions[0]?.textContent || '';
   $('resumen-venta').textContent = `${envio} · ${$('cantidad').value || 1} u. · ${tipo}`;
+  pintarPaquete();
 }
+
+/* ---------- envío: peso y medidas del paquete ---------- */
+
+/* Misma conversión que aCentimetros/aGramos de worker/logica.js (con tests): la app no importa del Worker. */
+function aCentimetros(texto) {
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mm|cm|m|"|in|pulgadas?)?\s*$/i.exec(String(texto ?? ''));
+  if (!m) return null;
+  const n = Number(m[1].replace(',', '.'));
+  const u = (m[2] || 'cm').toLowerCase();
+  const cm = u === 'mm' ? n / 10 : u === 'm' ? n * 100 : /^(in|"|pulgada)/.test(u) ? n * 2.54 : n;
+  return cm > 0 ? Math.max(1, Math.round(cm)) : null;
+}
+function aGramos(texto) {
+  const m = /^\s*(\d+(?:[.,]\d+)?)\s*(mg|g|kg|lb|oz)?\s*$/i.exec(String(texto ?? ''));
+  if (!m) return null;
+  const n = Number(m[1].replace(',', '.'));
+  const u = (m[2] || 'g').toLowerCase();
+  const g = u === 'mg' ? n / 1000 : u === 'kg' ? n * 1000 : u === 'lb' ? n * 453.592 : u === 'oz' ? n * 28.3495 : n;
+  return g > 0 ? Math.max(1, Math.round(g)) : null;
+}
+
+const CAMPOS_PAQUETE = { pesoG: 'paq-peso', largoCm: 'paq-largo', anchoCm: 'paq-ancho', altoCm: 'paq-alto' };
+const leerPaqueteApp = () => Object.fromEntries(Object.entries(CAMPOS_PAQUETE).map(([k, id]) => [k, $(id).value.trim()]));
+const paqueteCompleto = () => Object.values(leerPaqueteApp()).every(v => Number(String(v).replace(',', '.')) > 0);
+
+/** Las medidas del producto que ya están cargadas en los datos, convertidas a g y cm. */
+function medidasDelProducto() {
+  const valores = new Map([...$('paso-revision').querySelectorAll('[data-id]')].map(c => [c.dataset.id, c.value.trim()]));
+  const dato = id => { const a = estado.atributos.find(x => x.id === id); return a && valores.get(id) ? conUnidad(a, valores.get(id)) : ''; };
+  return {
+    pesoG: aGramos(dato('WEIGHT')),
+    altoCm: aCentimetros(dato('HEIGHT')),
+    anchoCm: aCentimetros(dato('WIDTH')),
+    largoCm: aCentimetros(dato('LENGTH') || dato('DEPTH'))
+  };
+}
+
+function pintarPaquete() {
+  const envio = $('envio').value;
+  $('bloque-paquete').hidden = envio === 'retiro';
+  $('paq-opciones').hidden = envio !== 'me2';
+  const m = medidasDelProducto();
+  $('paq-copiar').hidden = envio === 'retiro' || !Object.entries(m).some(([k, v]) => v && !$(CAMPOS_PAQUETE[k]).value.trim());
+}
+$('paq-copiar').addEventListener('click', () => {
+  const m = medidasDelProducto();
+  for (const [k, id] of Object.entries(CAMPOS_PAQUETE)) if (m[k] && !$(id).value.trim()) $(id).value = String(m[k]);
+  $('paq-peso').dispatchEvent(new Event('input', { bubbles: true }));
+});
 
 /* ---------- precio destacado ---------- */
 
@@ -1236,6 +1289,8 @@ function pendientes() {
     { ok: precioActual() > 0, texto: precioActual() > 0 ? `Precio $ ${miles(precioActual())}` : 'Precio', el: $('precio') },
     { ok: !faltan.length, texto: faltan.length ? `Falta${faltan.length > 1 ? 'n' : ''} ${faltan.length} dato${faltan.length > 1 ? 's' : ''} obligatorio${faltan.length > 1 ? 's' : ''}` : 'Datos obligatorios', el: faltan[0] }
   ];
+  // Mercado Envíos calcula el costo con el peso y las medidas: sin ellos no se puede publicar así.
+  if ($('envio').value === 'me2') items.push({ ok: paqueteCompleto(), texto: paqueteCompleto() ? 'Peso y medidas del paquete' : 'Falta el peso y las medidas del paquete', el: $('paq-peso') });
   // MercadoLibre rechaza los datos de contacto: se avisa antes y frena el Publicar.
   for (const [id, donde] of [['titulo', 'del título'], ['descripcion', 'de la descripción']]) {
     const que = contacto($(id).value);
@@ -1806,6 +1861,9 @@ function leerPublicacion() {
     costo: valorDinero('costo'),             // privados también: costo del producto y envío a cargo
     costoEnvio: valorDinero('costo-envio'),
     comisionManual: $('comision-manual').value.trim(),
+    paquete: leerPaqueteApp(),               // peso (g) y medidas (cm) del paquete, para el envío
+    envioGratis: $('envio-gratis').checked,
+    retiroTambien: $('retiro-tambien').checked,
     maxTitulo: estado.categoria?.maxTitulo || 60,
     pideGtin: !!estado.categoria?.pideGtin,
     categoriaDatos: estado.categoria,

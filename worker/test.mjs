@@ -7,7 +7,8 @@ import {
   elegirAtributos, atributoParaML, recortarTitulo, limpiarDescripcion,
   armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice, aplicarDefaults,
   estadoPublicacion, armarSeguimiento, cambioPublicacion, validarRespuesta, elegirParecidos,
-  leerComisiones, calcularGanancia, precioDeEquilibrio
+  leerComisiones, calcularGanancia, precioDeEquilibrio,
+  leerPaquete, paqueteParaML, aCentimetros, aGramos
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -281,6 +282,66 @@ test('precioDeEquilibrio: el precio donde la ganancia es cero', () => {
   assert.ok(g.ganancia >= 0 && g.ganancia < 100);
   assert.equal(precioDeEquilibrio({ costo: 0 }), 0);
   assert.equal(precioDeEquilibrio({ costo: 100, pct: 100 }), 0);
+});
+
+const PAQ = { pesoG: '1500', largoCm: '40', anchoCm: '30,4', altoCm: 15 };
+const BASE = { titulo: 'Taladro', categoria: 'MLA5232', precio: 45000, condicion: 'usado', fotos: ['p1'], atributos: [] };
+
+test('leerPaquete: los cuatro valores o nada', () => {
+  assert.deepEqual(leerPaquete(PAQ), { pesoG: 1500, largoCm: 40, anchoCm: 30, altoCm: 15 });
+  assert.equal(leerPaquete({ ...PAQ, altoCm: '' }), null);
+  assert.equal(leerPaquete({ ...PAQ, pesoG: 0 }), null);
+  assert.equal(leerPaquete({ ...PAQ, largoCm: 'abc' }), null);
+  assert.equal(leerPaquete(undefined), null);
+});
+
+test('paqueteParaML: atributos SELLER_PACKAGE_* con User Products, shipping.dimensions sin ellos', () => {
+  const up = paqueteParaML(PAQ, { userProducts: true });
+  assert.deepEqual(up.atributos.map(a => `${a.id}=${a.value_name}`),
+    ['SELLER_PACKAGE_WEIGHT=1500 g', 'SELLER_PACKAGE_LENGTH=40 cm', 'SELLER_PACKAGE_WIDTH=30 cm', 'SELLER_PACKAGE_HEIGHT=15 cm']);
+  assert.equal(up.dimensions, undefined);
+  assert.deepEqual(paqueteParaML(PAQ, { userProducts: false }), { dimensions: '15x30x40,1500' });
+  assert.equal(paqueteParaML({}, { userProducts: true }), null);
+});
+
+test('aCentimetros y aGramos: convierten lo que escribió la IA o Nico', () => {
+  assert.equal(aCentimetros('45 cm'), 45);
+  assert.equal(aCentimetros('1,2 m'), 120);
+  assert.equal(aCentimetros('800 mm'), 80);
+  assert.equal(aCentimetros('20'), 20);
+  assert.equal(aCentimetros('10 in'), 25);
+  assert.equal(aCentimetros('grande'), null);
+  assert.equal(aCentimetros('0 cm'), null);
+  assert.equal(aGramos('800 g'), 800);
+  assert.equal(aGramos('1,5 kg'), 1500);
+  assert.equal(aGramos('2 lb'), 907);
+  assert.equal(aGramos('500'), 500);
+  assert.equal(aGramos('pesado'), null);
+});
+
+test('armarItem: Mercado Envíos (me2) lleva peso y medidas, gratis y retiro', () => {
+  const conUP = armarItem({ ...BASE, envio: 'me2', paquete: PAQ, envioGratis: true, retiroTambien: true }, { userProducts: true });
+  assert.deepEqual(conUP.shipping, { mode: 'me2', local_pick_up: true, free_shipping: true });
+  assert.ok(conUP.attributes.some(a => a.id === 'SELLER_PACKAGE_WEIGHT' && a.value_name === '1500 g'));
+  const sinUP = armarItem({ ...BASE, envio: 'me2', paquete: PAQ }, { userProducts: false });
+  assert.deepEqual(sinUP.shipping, { mode: 'me2', local_pick_up: false, free_shipping: false, dimensions: '15x30x40,1500' });
+  assert.ok(!sinUP.attributes.some(a => a.id.startsWith('SELLER_PACKAGE')));
+});
+
+test('armarItem: retiro no lleva paquete; la configuración de la cuenta solo suma medidas si están', () => {
+  const retiro = armarItem({ ...BASE, envio: 'retiro', paquete: PAQ }, { userProducts: true });
+  assert.deepEqual(retiro.shipping, { mode: 'not_specified', local_pick_up: true, free_shipping: false });
+  assert.ok(!retiro.attributes.some(a => a.id.startsWith('SELLER_PACKAGE')));
+  const cuenta = armarItem({ ...BASE, envio: '' }, { userProducts: true });
+  assert.equal(cuenta.shipping, undefined);
+  assert.equal(armarItem({ ...BASE, envio: '', paquete: PAQ }, { userProducts: false }).shipping.dimensions, '15x30x40,1500');
+});
+
+test('faltantes: con Mercado Envíos el paquete es obligatorio; con retiro o cuenta, no', () => {
+  assert.deepEqual(faltantes({ ...BASE, envio: 'me2' }), ['el peso y las medidas del paquete (Mercado Envíos)']);
+  assert.deepEqual(faltantes({ ...BASE, envio: 'me2', paquete: PAQ }), []);
+  assert.deepEqual(faltantes({ ...BASE, envio: 'retiro' }), []);
+  assert.deepEqual(faltantes({ ...BASE, envio: '' }), []);
 });
 
 console.log(`\n${n} tests en verde`);

@@ -1632,17 +1632,19 @@ async function abrirRegistro(id, { silencioso = false } = {}) {
  * Un borrador nuevo con las fotos y los datos de otro (para publicar algo parecido,
  * o volver a publicar). No arrastra los ids de foto de MercadoLibre ni el link.
  */
-async function hacerOtraIgual(id) {
+async function hacerOtraIgual(id, { precio = 0 } = {}) {
   esperar('Copiando…');
   try {
     const reg = await api(`/api/registros/${id}`);
     if (!reg.analisis) throw new Error('Ese registro no tiene análisis.');
     const nuevo = nuevoId();
+    // `precio`: el último que tuvo en MercadoLibre (al republicar una cerrada); si no viene, el del borrador.
+    const publicacion = precio > 0 && reg.publicacion ? { ...reg.publicacion, precio: Math.round(precio) } : reg.publicacion;
     await api(`/api/registros/${nuevo}`, {
       fotos: (reg.fotos || []).map(f => ({ dataUrl: f.dataUrl })),
       thumb: reg.thumb,
       analisis: reg.analisis,
-      publicacion: reg.publicacion,
+      publicacion,
       estado: 'borrador'
     }, 'PUT');
     await abrirRegistro(nuevo);
@@ -1709,6 +1711,7 @@ function pintarPublicacion() {
   $('pub-reactivar').hidden = est !== 'pausada';
   $('pub-vendida').hidden = cerrada;
   $('pub-cerrada').hidden = !cerrada;
+  $('pub-republicar-caja').hidden = !cerrada;
   $('pub-precio').disabled = cerrada;
   $('pub-precio-guardar').disabled = cerrada;
 }
@@ -1807,6 +1810,13 @@ function dibujarPreguntas() {
 }
 
 $('pub-cerrar').addEventListener('click', () => $('pub').close());
+/* Republicar una vendida o finalizada: un borrador nuevo con sus fotos y datos, y el último precio de MercadoLibre. */
+$('pub-republicar').addEventListener('click', async () => {
+  const r = pub.reg;
+  if (!r) return;
+  $('pub').close();
+  await hacerOtraIgual(r.id, { precio: pub.seg?.precio || r.precio });
+});
 $('pub-copiar').addEventListener('click', async () => {
   try { await navigator.clipboard.writeText(pub.reg?.permalink || ''); toast('Link copiado.'); }
   catch { toast('No se pudo copiar. Mantené apretado el link para copiarlo.'); }

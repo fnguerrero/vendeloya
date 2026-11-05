@@ -288,7 +288,7 @@ test('leerComisiones: null, "" o ausente es "no informado", nunca 0 (ni comisió
 const fuenteApp = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const bloqueCompartido = /\/\* >>> compartido([\s\S]*?)\/\* <<< compartido \*\//.exec(fuenteApp)?.[1];
 assert.ok(bloqueCompartido, 'app.js no tiene el bloque ">>> compartido"');
-const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete'];
+const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete', 'unaALaVez', 'colaPorPerder'];
 const front = new Function(`${bloqueCompartido.slice(bloqueCompartido.indexOf('*/') + 2)}\nreturn { ${NOMBRES_COMPARTIDOS.join(', ')} };`)();
 const IMPLEMENTACIONES = {
   worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete },
@@ -392,6 +392,38 @@ test('resolverComision (front): nunca asume $0; sin dato o sin ese tipo pide car
   assert.equal(resolverComision({ ...base, disponible: false, tipos: [], tipoId: 'gold_special', manualPct: '13' }).monto, 5850);
   // todavía no se consultó
   assert.deepEqual(resolverComision({ ...base, disponible: null, tipos: [], tipoId: 'gold_special' }), { fuente: 'ninguna', motivo: 'actualizando' });
+});
+
+await testA('unaALaVez (front): el doble toque corre una sola vez y un error suelta el candado', async () => {
+  const { unaALaVez } = front;
+  let corridas = 0;
+  let soltar;
+  const espera = new Promise(r => { soltar = r; });
+  const sumar = unaALaVez(async () => { corridas++; await espera; return 'sumado'; });
+  // dos toques "al mismo tiempo" (antes: 6 → 8 productos, doble gasto de Claude)
+  const [a, b, c] = [sumar(), sumar(), sumar()];
+  soltar();
+  assert.deepEqual(await Promise.all([a, b, c]), ['sumado', undefined, undefined]);
+  assert.equal(corridas, 1);
+  // terminada la primera, el siguiente toque sí corre
+  assert.equal(await sumar(), 'sumado');
+  assert.equal(corridas, 2);
+  // si falla, el candado se suelta (no queda el botón muerto)
+  let intentos = 0;
+  const fallida = unaALaVez(async () => { intentos++; if (intentos === 1) throw new Error('boom'); return 'ok'; });
+  await assert.rejects(fallida(), /boom/);
+  assert.equal(await fallida(), 'ok');
+  // y los argumentos pasan
+  assert.equal(await unaALaVez(async (x, y) => x + y)(2, 3), 5);
+});
+
+test('colaPorPerder (front): cuenta lo que no quedó guardado como borrador', () => {
+  const { colaPorPerder } = front;
+  const c = estado => ({ estado });
+  assert.equal(colaPorPerder([]), 0);
+  assert.equal(colaPorPerder(undefined), 0);
+  assert.equal(colaPorPerder([c('lista'), c('lista')]), 0);                           // lo armado ya está en el historial
+  assert.equal(colaPorPerder([c('pendiente'), c('armando'), c('error'), c('lista')]), 3);   // con 4 pendientes, recargar los perdía sin avisar
 });
 
 enAmbas('parsearNumero: es-AR (coma decimal, punto de miles) y rechazo de lo ambiguo (worker y front)', ({ parsearNumero }) => {

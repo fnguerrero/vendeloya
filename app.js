@@ -576,6 +576,9 @@ function pintarCola() {
   $('cola-armar').textContent = colaCorriendo ? 'Armando…' : faltan ? (n > 1 ? `Armar ${faltan === 1 ? 'el que falta' : `los ${faltan}`}` : 'Armar') : fallaron ? 'Reintentar los que fallaron' : 'Armar todos';
   $('cola-vaciar').hidden = !n || colaCorriendo;
   $('lote-resumen').textContent = n ? `${listas} de ${n} listos` : 'cola vacía';
+  const porPerder = colaPorPerder(cola);
+  $('cola-aviso').hidden = !porPerder;
+  $('cola-aviso').textContent = `${porPerder === 1 ? 'Falta armar 1 producto' : `Faltan armar ${porPerder} productos`}: si cerrás o recargás la pestaña, se pierde${porPerder === 1 ? '' : 'n'} (lo ya armado queda como borrador).`;
 
   $('cola-lista').replaceChildren(...cola.map(c => {
     const li = document.createElement('li');
@@ -603,7 +606,7 @@ function pintarCola() {
   $('cola-siguiente').textContent = `Siguiente de la cola (${pendientesDeRevisar}) ›`;
 }
 
-async function sumarACola() {
+async function sumarAColaYa() {
   if (!estado.fotos.length || cola.length >= MAX_COLA) return;
   const fotos = estado.fotos.map(f => ({ dataUrl: f.dataUrl }));
   const thumb = await escalar(fotos[0].dataUrl, LADO_THUMB, 0.7).then(m => m.dataUrl).catch(() => '');
@@ -613,6 +616,8 @@ async function sumarACola() {
   dibujarFotos();
   $('lote').open = true;
 }
+/* Un doble toque en "Sumar" (o un toque mientras se escala la miniatura) no duplica el producto: ni doble gasto de Claude. */
+const sumarACola = unaALaVez(sumarAColaYa);
 
 function sacarDeCola(c) {
   const i = cola.indexOf(c);
@@ -1169,6 +1174,20 @@ function resolverComision({ tipos, disponible, tipoId, precio, precioConsultado,
   if (hayManual) return { fuente: 'manual', monto: precio * manual / 100, pct: manual, fijo: 0 };
   return { fuente: 'ninguna', motivo: disponible === null ? 'actualizando' : disponible ? 'sin-tipo' : 'sin-dato' };
 }
+/** Envuelve una función async: mientras corre, las llamadas repetidas (doble toque) se ignoran. Si falla, suelta el candado. */
+function unaALaVez(fn) {
+  let corriendo = false;
+  return async (...args) => {
+    if (corriendo) return undefined;
+    corriendo = true;
+    try { return await fn(...args); } finally { corriendo = false; }
+  };
+}
+
+/** Cuántos productos de la cola se perderían al cerrar o recargar la pestaña: todo lo que todavía no quedó como borrador guardado. */
+function colaPorPerder(cola) {
+  return (cola || []).filter(c => c.estado !== 'lista').length;
+}
 /* <<< compartido */
 
 /* Lo que cobra MercadoLibre por tipo de publicación, para el precio y la categoría de la última consulta. */
@@ -1536,6 +1555,8 @@ addEventListener('pagehide', guardarAlSalir);
 // Si el último guardado falló, el navegador pregunta antes de cerrar.
 addEventListener('beforeunload', e => {
   if (sinGuardar && $('guardado').textContent.startsWith('No se pudo')) e.preventDefault();
+  // La cola vive solo en esta pestaña: lo que no se armó todavía se perdería.
+  if (colaPorPerder(cola)) e.preventDefault();
 });
 
 /* ---------- historial ---------- */

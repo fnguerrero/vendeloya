@@ -8,7 +8,8 @@ import {
   armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice, aplicarDefaults,
   estadoPublicacion, armarSeguimiento, cambioPublicacion, validarRespuesta, elegirParecidos,
   leerComisiones, calcularGanancia, precioDeEquilibrio,
-  leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete
+  leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete,
+  huellaItem, marcarValidado, estaValidado, gastarValidacion
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -288,7 +289,7 @@ test('leerComisiones: null, "" o ausente es "no informado", nunca 0 (ni comisió
 const fuenteApp = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const bloqueCompartido = /\/\* >>> compartido([\s\S]*?)\/\* <<< compartido \*\//.exec(fuenteApp)?.[1];
 assert.ok(bloqueCompartido, 'app.js no tiene el bloque ">>> compartido"');
-const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete', 'unaALaVez', 'colaPorPerder'];
+const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete', 'unaALaVez', 'colaPorPerder', 'textoEnvio', 'avisoEnvioGratis'];
 const front = new Function(`${bloqueCompartido.slice(bloqueCompartido.indexOf('*/') + 2)}\nreturn { ${NOMBRES_COMPARTIDOS.join(', ')} };`)();
 const IMPLEMENTACIONES = {
   worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete },
@@ -553,6 +554,130 @@ test('faltantes: con Mercado Envíos el paquete es obligatorio; con retiro o cue
   assert.deepEqual(faltantes({ ...BASE, envio: 'me2', paquete: PAQ }), []);
   assert.deepEqual(faltantes({ ...BASE, envio: 'retiro' }), []);
   assert.deepEqual(faltantes({ ...BASE, envio: '' }), []);
+});
+
+test('textoEnvio y avisoEnvioGratis (front): el diálogo dice el envío y avisa si "Te queda" no lo descuenta', () => {
+  const { textoEnvio, avisoEnvioGratis } = front;
+  assert.equal(textoEnvio({ envio: 'retiro' }), 'solo retiro en persona');
+  assert.equal(textoEnvio({ envio: 'me2', envioGratis: true, retiroTambien: true }), 'Mercado Envíos, envío gratis (lo pagás vos), y también retiro en persona');
+  assert.equal(textoEnvio({ envio: 'me2' }), 'Mercado Envíos, el envío lo paga el comprador');
+  assert.match(textoEnvio({ envio: '' }), /configurado tu cuenta/);
+  assert.match(avisoEnvioGratis({ envio: 'me2', envioGratis: true, costoEnvio: 0 }), /NO lo descuenta/);
+  assert.match(avisoEnvioGratis({ envio: 'me2', envioGratis: true, costoEnvio: '' }), /NO lo descuenta/);
+  assert.equal(avisoEnvioGratis({ envio: 'me2', envioGratis: true, costoEnvio: 4000 }), '');   // con el costo cargado, "Te queda" ya lo descuenta
+  assert.equal(avisoEnvioGratis({ envio: 'me2', envioGratis: false, costoEnvio: 0 }), '');
+  assert.equal(avisoEnvioGratis({ envio: 'retiro', envioGratis: true, costoEnvio: 0 }), '');
+});
+
+await testA('huellaItem / estaValidado: la huella es estable y cambia con cualquier cambio de contenido', async () => {
+  const kv = fakeKV();
+  const a = { price: 45000, title: 'x', attributes: [{ id: 'A', value_name: '1' }], shipping: { mode: 'me2', local_pick_up: false } };
+  const mismoEnOtroOrden = { shipping: { local_pick_up: false, mode: 'me2' }, attributes: [{ value_name: '1', id: 'A' }], title: 'x', price: 45000 };
+  assert.equal(await huellaItem(a), await huellaItem(mismoEnOtroOrden));
+  assert.match(await huellaItem(a), /^[0-9a-f]{64}$/);
+  assert.equal(await estaValidado(kv, a), false);
+  await marcarValidado(kv, a);
+  assert.equal(await estaValidado(kv, a), true);
+  assert.equal(await estaValidado(kv, mismoEnOtroOrden), true);
+  for (const cambio of [{ price: 45001 }, { title: 'y' }, { shipping: { mode: 'me2', local_pick_up: true } }, { attributes: [] }])
+    assert.equal(await estaValidado(kv, { ...a, ...cambio }), false, JSON.stringify(cambio));
+  await gastarValidacion(kv, a);
+  assert.equal(await estaValidado(kv, a), false);
+  assert.ok([...kv.escrituras].every(e => e.ttl >= 60), 'la marca debe vencer (TTL de KV ≥ 60 s)');
+});
+
+/* El Worker de punta a punta con MercadoLibre simulado (ninguna llamada sale a la red). */
+function fakeKV() {
+  const datos = new Map();
+  return { datos, escrituras: [],
+    async get(k, tipo) { const v = datos.get(k); return v === undefined ? null : tipo === 'json' ? JSON.parse(v) : v; },
+    async put(k, v, opts) { datos.set(k, v); this.escrituras.push({ k, ttl: opts?.expirationTtl }); },
+    async delete(k) { datos.delete(k); } };
+}
+
+await testA('Worker: /api/publicar solo publica lo que pasó /api/revisar con ese mismo contenido', async () => {
+  const { default: worker } = await import('./worker.js');
+  const llamadas = [];
+  let validador = () => ({ status: 200, cuerpo: {} });
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    llamadas.push(`${init.method || 'GET'} ${ruta}`);
+    const responder = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (ruta === '/users/me') return responder(200, { id: 1, nickname: 'prueba', tags: ['user_product_seller'] });
+    if (ruta === '/items/validate') { const r = validador(JSON.parse(init.body)); return responder(r.status, r.cuerpo); }
+    if (ruta === '/items') return responder(201, { id: 'MLA999000001', permalink: 'https://articulo.mercadolibre.com.ar/MLA-999000001', status: 'active' });
+    if (ruta.endsWith('/description')) return responder(201, {});
+    if (ruta === '/pictures/items/upload') return responder(201, { id: 'subida' });
+    return responder(404, { message: `ruta no simulada: ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 1, vence: Date.now() + 3600e3 }));
+    const env = { KV: kv, APP_SECRET: 'secreto' };
+    const llamar = async (ruta, cuerpo) => {
+      const r = await worker.fetch(new Request(`https://w.test${ruta}`, { method: 'POST', body: JSON.stringify(cuerpo),
+        headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto', 'content-type': 'application/json' } }), env);
+      return { status: r.status, ...(await r.json()) };
+    };
+    const pub = (extra = {}) => ({ titulo: 'Taladro percutor', categoria: 'MLA5232', precio: 45000, condicion: 'usado', cantidad: 1, tipoPublicacion: 'gold_special',
+      envio: 'me2', paquete: { pesoG: '1500', largoCm: '40', anchoCm: '30', altoCm: '15' }, descripcion: 'Anda bien', atributos: [], ...extra });
+    const cuerpo = (extra, fotos = [{ id: 'p1' }]) => ({ publicacion: pub(extra), fotos });
+    const creados = () => llamadas.filter(l => l === 'POST /items').length;
+
+    // 1) publicar SIN revisar: rechazado, y no crea nada (el caso del paquete que se saltaba el validador)
+    let r = await llamar('/api/publicar', cuerpo());
+    assert.equal(r.status, 412);
+    assert.match(r.error, /no pasó la revisión/);
+    assert.equal(creados(), 0);
+
+    // 2) revisar (el validador aprueba) → publicar con el mismo contenido: sale
+    r = await llamar('/api/revisar', cuerpo());
+    assert.equal(r.ok, true);
+    // 2b) cambiar el precio después de revisar: otro contenido, rechazado
+    r = await llamar('/api/publicar', cuerpo({ precio: 46000 }));
+    assert.equal(r.status, 412);
+    assert.equal(creados(), 0);
+    // 2c) cambiar el paquete después de revisar: también
+    r = await llamar('/api/publicar', cuerpo({ paquete: { pesoG: '1600', largoCm: '40', anchoCm: '30', altoCm: '15' } }));
+    assert.equal(r.status, 412);
+    // 2d) el contenido revisado, tal cual: publica (y la descripción, aparte, también)
+    r = await llamar('/api/publicar', cuerpo());
+    assert.equal(r.status, 200);
+    assert.equal(r.id, 'MLA999000001');
+    assert.equal(creados(), 1);
+    assert.ok(llamadas.includes('POST /items/MLA999000001/description'));
+
+    // 3) la revisión se gasta: repetir el mismo POST no crea una segunda publicación
+    r = await llamar('/api/publicar', cuerpo());
+    assert.equal(r.status, 412);
+    assert.equal(creados(), 1);
+
+    // 4) una foto sin id nunca fue revisada: se rechaza antes de subir nada
+    const subidasAntes = llamadas.filter(l => l.includes('/pictures/')).length;
+    r = await llamar('/api/publicar', cuerpo({}, [{ id: 'p1' }, { dataUrl: 'data:image/jpeg;base64,AAAA' }]));
+    assert.equal(r.status, 412);
+    assert.equal(llamadas.filter(l => l.includes('/pictures/')).length, subidasAntes);
+
+    // 5) el validador rechaza con errores: no queda marca, publicar falla
+    validador = () => ({ status: 400, cuerpo: { cause: [{ type: 'error', code: 'item.attribute.invalid', message: 'atributo inválido' }] } });
+    r = await llamar('/api/revisar', cuerpo({ titulo: 'Otro título' }));
+    assert.equal(r.ok, false);
+    r = await llamar('/api/publicar', cuerpo({ titulo: 'Otro título' }));
+    assert.equal(r.status, 412);
+    assert.equal(creados(), 1);
+
+    // 6) solo avisos (type warning): se puede publicar
+    validador = () => ({ status: 400, cuerpo: { cause: [{ type: 'warning', code: 'shipping.lost_me2_by_catalog', message: 'aviso' }] } });
+    r = await llamar('/api/revisar', cuerpo({ titulo: 'Con aviso' }));
+    assert.equal(r.ok, true);
+    assert.equal(r.avisos.length, 1);
+    r = await llamar('/api/publicar', cuerpo({ titulo: 'Con aviso' }));
+    assert.equal(r.status, 200);
+    assert.equal(creados(), 2);
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
 });
 
 console.log(`\n${n} tests en verde`);

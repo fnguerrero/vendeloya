@@ -29,7 +29,7 @@
 
 import { identificar, completarAtributos, responderPregunta as borradorConIA } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, CONDICIONES } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, marcarValidado, estaValidado, gastarValidacion, CONDICIONES } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -484,23 +484,35 @@ async function revisar(env, cuerpo) {
   const yo = await usuario(env);
   const item = armarItem(conFotos, { userProducts: yo.userProducts });
   const { status, datos } = await ml(env, '/items/validate', { metodo: 'POST', cuerpo: item, tolerar: [400] });
-  if (status !== 400) return { ok: true, fotos, item, avisos: [] };
+  if (status !== 400) {
+    await marcarValidado(env.KV, item);   // /api/publicar solo acepta lo que pasó por acá, con este mismo contenido
+    return { ok: true, fotos, item, avisos: [] };
+  }
   // Queda en el log del Worker (wrangler tail) por si hay que ver la respuesta cruda.
   console.log('validate 400', JSON.stringify(datos));
   const { errores, avisos } = separarCausas(datos);
+  if (!errores.length) await marcarValidado(env.KV, item);   // solo avisos: se puede publicar
   return { ok: !errores.length, fotos, item, errores, avisos };
 }
+
+const SIN_REVISAR = 'Esta publicación no pasó la revisión de MercadoLibre con este contenido (o cambió después). Tocá Publicar de nuevo para que la revise.';
 
 /** Publica de verdad. La app lo llama solo después de que Nico confirma. */
 async function publicar(env, cuerpo) {
   const p = cuerpo.publicacion || {};
+  // Una foto sin id nunca pasó por la revisión (la revisión es la que las sube): no se sube nada acá.
+  if ((cuerpo.fotos || []).some(f => !f.id)) throw Object.assign(new Error(SIN_REVISAR), { status: 412 });
   const fotos = await subirFotos(env, cuerpo.fotos || []);
   const conFotos = { ...p, fotos };
   const falta = faltantes(conFotos);
   if (falta.length) throw Object.assign(new Error(`Falta completar: ${falta.join(', ')}.`), { status: 400 });
 
   const yo = await usuario(env);
-  const { datos: item } = await ml(env, '/items', { metodo: 'POST', cuerpo: armarItem(conFotos, { userProducts: yo.userProducts }) });
+  const cuerpoItem = armarItem(conFotos, { userProducts: yo.userProducts });
+  // Solo se publica el contenido exacto que aprobó el validador (POST /items/validate, vía /api/revisar).
+  if (!(await estaValidado(env.KV, cuerpoItem))) throw Object.assign(new Error(SIN_REVISAR), { status: 412 });
+  const { datos: item } = await ml(env, '/items', { metodo: 'POST', cuerpo: cuerpoItem });
+  await gastarValidacion(env.KV, cuerpoItem);
 
   // La descripción va aparte y después: si falla, la publicación ya existe y se avisa.
   let avisoDescripcion = null;

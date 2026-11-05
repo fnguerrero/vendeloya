@@ -434,6 +434,36 @@ export function precioDeEquilibrio({ costo, envio, pct, fijo }) {
   return Math.ceil(v / paso - 1e-9) * paso;
 }
 
+/* ---------- publicar solo lo que pasó el validador ---------- */
+
+/** Lo mismo con las claves en cualquier orden: dos ítems iguales dan la misma huella. */
+function ordenado(v) {
+  if (Array.isArray(v)) return v.map(ordenado);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.keys(v).sort().map(k => [k, ordenado(v[k])]));
+  return v;
+}
+
+/** Huella (SHA-256) del cuerpo exacto del ítem: cualquier cambio de contenido cambia la huella. */
+export async function huellaItem(item) {
+  const bytes = new TextEncoder().encode(JSON.stringify(ordenado(item)));
+  const hash = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** El validador de MercadoLibre aprobó ESTE contenido (se guarda una hora en el KV). */
+export async function marcarValidado(kv, item, ttl = 3600) {
+  await kv.put(`validado:${await huellaItem(item)}`, '1', { expirationTtl: ttl });
+}
+
+export async function estaValidado(kv, item) {
+  return (await kv.get(`validado:${await huellaItem(item)}`)) === '1';
+}
+
+/** Tras publicar, la marca se gasta: el mismo contenido no se publica dos veces con una sola revisión. */
+export async function gastarValidacion(kv, item) {
+  await kv.delete(`validado:${await huellaItem(item)}`);
+}
+
 /* El historial guarda hasta esta cantidad; los más viejos se caen de la lista (no del KV). */
 export const MAX_HISTORIAL = 200;
 

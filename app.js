@@ -1188,6 +1188,19 @@ function unaALaVez(fn) {
 function colaPorPerder(cola) {
   return (cola || []).filter(c => c.estado !== 'lista').length;
 }
+/** Cómo queda el envío, dicho para el diálogo de confirmación. */
+function textoEnvio({ envio, envioGratis, retiroTambien }) {
+  if (envio === 'retiro') return 'solo retiro en persona';
+  if (envio === 'me2') return `Mercado Envíos, ${envioGratis ? 'envío gratis (lo pagás vos)' : 'el envío lo paga el comprador'}${retiroTambien ? ', y también retiro en persona' : ''}`;
+  return 'envío según lo que tenga configurado tu cuenta';
+}
+
+/** Con envío gratis y sin el costo cargado, "Te queda" no descuenta el envío: hay que decirlo. '' si no aplica. */
+function avisoEnvioGratis({ envio, envioGratis, costoEnvio }) {
+  return envio === 'me2' && envioGratis && !(Number(costoEnvio) > 0)
+    ? 'Envío gratis: no cargaste cuánto te cuesta el envío, así que «Te queda» NO lo descuenta (puede quedar menos de lo que figura).'
+    : '';
+}
 /* <<< compartido */
 
 /* Lo que cobra MercadoLibre por tipo de publicación, para el precio y la categoría de la última consulta. */
@@ -1235,6 +1248,9 @@ function pintarGanancia() {
   const caja = $('ganancia');
   caja.hidden = !g;
   $('ganancia-equilibrio').hidden = true;
+  const avisoGratis = avisoEnvioGratis({ envio: $('envio').value, envioGratis: $('envio-gratis').checked, costoEnvio: envio });
+  $('ganancia-aviso').hidden = !g || !avisoGratis;
+  $('ganancia-aviso').textContent = avisoGratis;
   if (!g) { $('resumen-ganancia').textContent = com.fuente === 'ninguna' && com.motivo !== 'actualizando' ? 'falta la comisión' : costo ? 'calculando…' : 'cargá lo que te costó'; return; }
   $('g-precio').textContent = pesos(g.precio);
   $('g-comision-t').textContent = `Comisión${com.pct != null ? ` (${com.pct} %)` : ''}`;
@@ -1243,10 +1259,10 @@ function pintarGanancia() {
   $('g-envio').textContent = `− ${pesos(g.envio)}`;
   $('g-costo').textContent = g.costo ? `− ${pesos(g.costo)}` : '—';
   const total = caja.querySelector('.total dt');
-  total.textContent = g.costo ? `Te queda (${g.margen} %)` : 'Te acreditan';
+  total.textContent = (g.costo ? `Te queda (${g.margen} %)` : 'Te acreditan') + (avisoGratis ? ' sin el envío' : '');
   $('g-ganancia').textContent = pesos(g.costo ? g.ganancia : g.neto);
   caja.dataset.signo = !g.costo ? '' : g.ganancia > 0 ? 'mas' : g.ganancia < 0 ? 'menos' : '';
-  $('resumen-ganancia').textContent = g.costo ? `te quedan ${pesos(g.ganancia)}` : `te acreditan ${pesos(g.neto)}`;
+  $('resumen-ganancia').textContent = (g.costo ? `te quedan ${pesos(g.ganancia)}` : `te acreditan ${pesos(g.neto)}`) + (avisoGratis ? ' (sin el envío)' : '');
   if (g.costo && g.ganancia < 0) {
     const eq = precioDeEquilibrio({ costo: g.costo, envio: g.envio, pct: com.pct, fijo: com.fijo });
     $('ganancia-equilibrio').hidden = !eq;
@@ -2078,8 +2094,11 @@ $('publicar').addEventListener('click', async () => {
   }
   $('resultado-revision').hidden = true;
   const p = leerPublicacion();
-  $('confirmar-texto').textContent = `"${p.titulo}" a ${pesos(p.precio)}, ${p.cantidad} unidad${p.cantidad > 1 ? 'es' : ''}, ${$('tipo').selectedOptions[0]?.textContent || ''}${p.envio === 'retiro' ? ', retiro en persona' : ''}.`;
-  $('confirmar-avisos').replaceChildren(...notas.map(t => { const li = document.createElement('li'); li.textContent = t; return li; }));
+  const medidas = p.envio === 'retiro' ? null : validarPaquete(p.paquete).valores;
+  $('confirmar-texto').textContent = `"${p.titulo}" a ${pesos(p.precio)}, ${p.cantidad} unidad${p.cantidad > 1 ? 'es' : ''}, ${$('tipo').selectedOptions[0]?.textContent || ''}. Envío: ${textoEnvio(p)}.`
+    + (medidas ? ` Paquete: ${medidas.pesoG.toLocaleString('es-AR')} g, ${medidas.largoCm} × ${medidas.anchoCm} × ${medidas.altoCm} cm.` : '');
+  const avisoGratis = avisoEnvioGratis({ envio: p.envio, envioGratis: p.envioGratis, costoEnvio: p.costoEnvio });
+  $('confirmar-avisos').replaceChildren(...[...notas, ...(avisoGratis ? [avisoGratis] : [])].map(t => { const li = document.createElement('li'); li.textContent = t; return li; }));
   $('confirmar').showModal();
 });
 $('confirmar-no').addEventListener('click', () => $('confirmar').close());

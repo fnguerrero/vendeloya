@@ -450,6 +450,14 @@ export async function huellaItem(item) {
   return [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Lo que se sella: el ítem y la descripción. La descripción no viaja en el ítem (se manda aparte,
+ * después de publicar), así que sin esto se podía cambiar el texto entre revisar y publicar.
+ */
+export function paraHuella(item, descripcion) {
+  return { item, descripcion: limpiarDescripcion(descripcion) };
+}
+
 /** El validador de MercadoLibre aprobó ESTE contenido (se guarda una hora en el KV). */
 export async function marcarValidado(kv, item, ttl = 3600) {
   await kv.put(`validado:${await huellaItem(item)}`, '1', { expirationTtl: ttl });

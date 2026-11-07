@@ -9,7 +9,7 @@ import {
   estadoPublicacion, armarSeguimiento, cambioPublicacion, validarRespuesta, elegirParecidos,
   leerComisiones, calcularGanancia, precioDeEquilibrio,
   leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete,
-  huellaItem, marcarValidado, estaValidado, gastarValidacion
+  huellaItem, paraHuella, marcarValidado, estaValidado, gastarValidacion
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -636,6 +636,10 @@ await testA('Worker: /api/publicar solo publica lo que pasó /api/revisar con es
     assert.equal(r.ok, true);
     // 2b) cambiar el precio después de revisar: otro contenido, rechazado
     r = await llamar('/api/publicar', cuerpo({ precio: 46000 }));
+    assert.equal(r.status, 412);
+    assert.equal(creados(), 0);
+    // 2b') cambiar solo la descripción después de revisar: también (va aparte del ítem pero se sella con él)
+    r = await llamar('/api/publicar', cuerpo({ descripcion: 'Otra descripción' }));
     assert.equal(r.status, 412);
     assert.equal(creados(), 0);
     // 2c) cambiar el paquete después de revisar: también

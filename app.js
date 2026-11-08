@@ -218,6 +218,35 @@ $('exportar-historial').addEventListener('click', async () => {
   b.textContent = 'Descargar mi historial (JSON)';
 });
 
+/* Cargar un respaldo: suma lo que falta, nunca pisa un registro que ya está (la lógica está en respaldo.js). */
+$('importar-historial').addEventListener('click', () => $('importar-archivo').click());
+$('importar-archivo').addEventListener('change', async ev => {
+  const archivo = ev.target.files[0];
+  ev.target.value = '';
+  if (!archivo) return;
+  const b = $('importar-historial');
+  b.disabled = true;
+  try {
+    let contenido;
+    try { contenido = JSON.parse(await archivo.text()); } catch { throw new Error('El archivo no es un JSON válido.'); }
+    const { registros: existentes } = await api('/api/registros');
+    const plan = window.Respaldo.planImportacion(contenido, existentes.map(r => r.id));
+    if (!plan.ok) throw new Error(plan.error);
+    let hechos = 0;
+    for (const [i, r] of plan.importar.entries()) {
+      b.textContent = `Cargando ${i + 1} de ${plan.importar.length}…`;
+      await api(`/api/registros/${r.id}`, r.cambios, 'PUT');
+      hechos++;
+    }
+    toast(window.Respaldo.resumenImportacion(plan, hechos));
+    if (hechos) cargarHistorial({ forzar: true });
+  } catch (e) {
+    toast(`No se pudo cargar el respaldo: ${e.message}`);
+  }
+  b.disabled = false;
+  b.textContent = 'Cargar un respaldo (JSON)';
+});
+
 /* ---------- tema ---------- */
 
 /** auto (como el sistema), claro u oscuro; se recuerda por dispositivo. */

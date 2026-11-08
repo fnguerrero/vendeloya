@@ -737,4 +737,32 @@ test('contrato real: atributoParaML arma un atributo válido con cada opción re
   }
 });
 
+/* Respaldo del historial: qué se importa de un archivo (respaldo.js, el mismo que carga la app). */
+import { createRequire } from 'node:module';
+const { planImportacion, resumenImportacion } = createRequire(import.meta.url)('../respaldo.js');
+
+test('respaldo: importa solo lo nuevo, no pisa lo existente y descarta lo inválido', () => {
+  const reg = (id, extra = {}) => ({ id, creado: 'x', fotos: [{ id: 'f' }], thumb: 't', estado: 'borrador', basura: 1, ...extra });
+  const archivo = { app: 'VendeloYa', exportado: '2026-11-07', registros: [
+    reg('aaaaaaaa-1'), reg('bbbbbbbb-2'), reg('bbbbbbbb-2'), reg('corto'), reg('cccccccc-3', { fotos: 'no' }),
+    null, { id: 'dddddddd-4' }, reg('eeeeeeee-5', { ml: { id: 'MLA1', permalink: 'p' }, estado: 'publicada' })
+  ] };
+  const plan = planImportacion(archivo, new Set(['aaaaaaaa-1']));
+  assert.equal(plan.ok, true);
+  assert.deepEqual(plan.importar.map(r => r.id), ['bbbbbbbb-2', 'eeeeeeee-5']);
+  assert.deepEqual(plan.yaExistian, ['aaaaaaaa-1']);
+  assert.deepEqual(plan.invalidos.map(i => i.n), [3, 4, 5, 6, 7]);
+  assert.deepEqual(Object.keys(plan.importar[0].cambios).sort(), ['estado', 'fotos', 'thumb']);   // 'basura' y 'creado' no entran
+  assert.equal(plan.importar[1].cambios.ml.id, 'MLA1');
+  assert.equal(resumenImportacion(plan, 2), '2 registros cargados · 1 ya estaba (no se pisan) · 5 inválidos descartados');
+});
+
+test('respaldo: rechaza archivos que no son de VendeloYa, sin registros o demasiado grandes', () => {
+  for (const malo of [null, [], 'x', { app: 'Otra', registros: [] }, { app: 'VendeloYa' }, { app: 'VendeloYa', registros: {} }])
+    assert.equal(planImportacion(malo, []).ok, false, JSON.stringify(malo));
+  const muchos = { app: 'VendeloYa', registros: Array.from({ length: 201 }, (_, i) => ({ id: `registro-${String(i).padStart(4, '0')}`, estado: 'borrador' })) };
+  assert.match(planImportacion(muchos, []).error, /máximo es 200/);
+  assert.equal(planImportacion({ app: 'VendeloYa', registros: [] }, []).importar.length, 0);
+});
+
 console.log(`\n${n} tests en verde`);

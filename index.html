@@ -334,6 +334,9 @@
     <h3>Respaldo</h3>
     <button id="exportar-historial" class="boton secundario ancho" type="button">Descargar mi historial (JSON)</button>
     <p class="ayuda">Todo lo que armaste, con sus fotos, en un archivo. Por si algún día hay que recuperarlo.</p>
+    <button id="importar-historial" class="boton secundario ancho" type="button">Cargar un respaldo (JSON)</button>
+    <input id="importar-archivo" type="file" accept="application/json,.json" hidden>
+    <p class="ayuda">Suma al historial lo que traiga el archivo. Lo que ya está no se pisa.</p>
 
     <button id="instalar-app" class="boton secundario ancho" type="button" hidden>Instalar la app en este dispositivo</button>
 
@@ -451,7 +454,8 @@
   </dialog>
 
   <script src="config.js?v=1"></script>
-  <script src="app.js?v=26"></script>
+  <script src="respaldo.js?v=1"></script>
+  <script src="app.js?v=27"></script>
   <script src="editor.js?v=3"></script>
 </body>
 </html>

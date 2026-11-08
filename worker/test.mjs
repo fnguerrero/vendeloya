@@ -3,6 +3,7 @@
    bajados de /categories/MLA5232/attributes el 17/10/2026. */
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   elegirAtributos, atributoParaML, recortarTitulo, limpiarDescripcion,
   armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, gtinValido, aplicarGtin, separarCausas, resumenRegistro, actualizarIndice, aplicarDefaults,
@@ -735,6 +736,71 @@ test('contrato real: atributoParaML arma un atributo válido con cada opción re
       assert.equal(r.value_id, o.id, `${c.busqueda}: ${a.id} no encontró su propia opción`);
     }
   }
+});
+
+await testA('Worker: con el token vencido, pedidos simultáneos comparten UN solo refresco (el refresh token es de un solo uso)', async () => {
+  const { default: worker } = await import('./worker.js');
+  const fetchOriginal = globalThis.fetch;
+  let refrescos = 0;
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    const responder = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (ruta === '/oauth/token') {
+      refrescos++;
+      await new Promise(r => setTimeout(r, 20));
+      // el refresh token es de un solo uso: el segundo intento falla, como en MercadoLibre real
+      return refrescos === 1 ? responder(200, { access_token: 'nuevo', refresh_token: 'r2', user_id: 1, expires_in: 21600 }) : responder(400, { error: 'invalid_grant' });
+    }
+    if (ruta === '/users/me') return responder(200, { id: 1, nickname: 'prueba', tags: [] });
+    return responder(404, {});
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 'viejo', refresh_token: 'r1', user_id: 1, vence: Date.now() - 1000 }));
+    const env = { KV: kv, APP_SECRET: 's', ML_CLIENT_ID: 'i', ML_CLIENT_SECRET: 'c', ANTHROPIC_API_KEY: 'a' };
+    const pedir = () => worker.fetch(new Request('https://w.test/api/estado', { headers: { origin: 'http://localhost:5610', 'x-clave': 's' } }), env).then(async r => ({ status: r.status, ...(await r.json()) }));
+    const rs = await Promise.all([pedir(), pedir(), pedir()]);
+    assert.equal(refrescos, 1, 'se refrescó más de una vez');
+    for (const r of rs) {
+      assert.equal(r.status, 200);
+      assert.equal(r.conectado, true);
+      assert.ok(r.token.venceEnMin > 300, 'el token nuevo dura ~6 h');
+      assert.match(r.token.ultimoRefresco, /^\d{4}-\d\d-\d\dT/);
+    }
+    assert.ok(!JSON.stringify(rs).includes('nuevo') && !JSON.stringify(rs).includes('r2'), 'la respuesta no debe incluir el token');
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+});
+
+/* Scripts de validación contra ML real (tools/validar-*.mjs): sin clave no hacen nada y no filtran datos. */
+import { spawnSync } from 'node:child_process';
+const herramienta = n => fileURLToPath(new URL(`../tools/${n}`, import.meta.url));
+const correr = (n, args = [], env = {}) => spawnSync(process.execPath, [herramienta(n), ...args], { encoding: 'utf8', env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...env } });
+
+test('tools/validar-*: sin VENDELOYA_CLAVE terminan con error claro y sin tocar la red', () => {
+  for (const s of ['validar-comision.mjs', 'validar-token.mjs', 'validar-seguimiento.mjs', 'validar-preguntas.mjs']) {
+    const r = correr(s);
+    assert.equal(r.status, 1, s);
+    assert.match(r.stderr + r.stdout, /Falta la variable VENDELOYA_CLAVE/, s);
+  }
+});
+
+test('tools/validar-lote --seco: 8 borradores reales, ninguno con campos faltantes, la mitad con me2', () => {
+  const r = correr('validar-lote.mjs', ['--seco']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^8 borradores de prueba \(4 con Mercado Envíos y paquete\)/);
+  const lineas = r.stdout.split('\n').filter(l => l.startsWith('- '));
+  assert.equal(lineas.length, 8);
+  assert.ok(lineas.every(l => l.includes('| faltan: 0 |')), r.stdout);
+  assert.equal(lineas.filter(l => l.endsWith('shipping: me2')).length, 4);
+  assert.equal(lineas.filter(l => l.endsWith('shipping: not_specified')).length, 4);
+});
+
+test('tools/_cliente forma(): muestra la estructura sin los valores', async () => {
+  const { forma } = await import('../tools/_cliente.mjs');
+  assert.deepEqual(forma({ id: 'MLA1', nombre: 'Juan Pérez', n: 3, ok: true, x: null, l: [{ a: 'q' }, { a: 'r' }] }),
+    { id: 'string', nombre: 'string', n: 'number', ok: 'boolean', x: 'null', l: [{ a: 'string' }, '… 2 en total'] });
 });
 
 /* Respaldo del historial: qué se importa de un archivo (respaldo.js, el mismo que carga la app). */

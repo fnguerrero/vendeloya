@@ -163,13 +163,30 @@ async function oauthCallback(request, env) {
 }
 
 /** El access token vigente; lo renueva si venció. El refresh token es de un solo uso. */
+let refrescoEnCurso = null;
 async function token(env) {
   const guardado = await env.KV.get('ml:tokens', 'json');
   if (!guardado) return null;
   if (Date.now() < guardado.vence) return guardado;
-  const t = await pedirToken(env, { grant_type: 'refresh_token', refresh_token: guardado.refresh_token });
-  await guardarTokens(env, t);
-  return env.KV.get('ml:tokens', 'json');
+  // El refresh token se gasta al usarlo: si dos pedidos simultáneos (la app lanza varios a la vez)
+  // lo usan, el segundo falla. Todos esperan el mismo refresco.
+  if (refrescoEnCurso) return refrescoEnCurso;
+  refrescoEnCurso = (async () => {
+    try {
+      const t = await pedirToken(env, { grant_type: 'refresh_token', refresh_token: guardado.refresh_token });
+      await guardarTokens(env, t);
+      await env.KV.put('ml:refresco', new Date().toISOString());
+      return await env.KV.get('ml:tokens', 'json');
+    } catch (e) {
+      // Otra instancia del Worker pudo renovarlo primero: si ya hay un token vigente, se usa ese.
+      const otro = await env.KV.get('ml:tokens', 'json');
+      if (otro && Date.now() < otro.vence) return otro;
+      throw e;
+    } finally {
+      refrescoEnCurso = null;
+    }
+  })();
+  return refrescoEnCurso;
 }
 
 /* ---------- MercadoLibre ---------- */
@@ -399,7 +416,13 @@ async function estado(env) {
   const t = await env.KV.get('ml:tokens', 'json');
   if (!t) return { conectado: false };
   try {
-    return { conectado: true, ...(await usuario(env)) };
+    const yo = await usuario(env);   // si el token venció, acá se renueva
+    const t = await env.KV.get('ml:tokens', 'json');
+    // Sin el token ni nada secreto: solo cuándo vence y cuándo se renovó por última vez.
+    return {
+      conectado: true, ...yo,
+      token: { venceEnMin: t ? Math.round((t.vence - Date.now()) / 60000) : null, ultimoRefresco: (await env.KV.get('ml:refresco')) || null }
+    };
   } catch (e) {
     return { conectado: false, error: e.message };
   }

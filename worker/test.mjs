@@ -684,4 +684,57 @@ await testA('Worker: /api/publicar solo publica lo que pasó /api/revisar con es
   }
 });
 
+/* Contrato con MercadoLibre REAL: respuestas públicas grabadas con tools/grabar-fixtures.mjs
+   (8 rubros distintos). Si ML cambia la forma, se vuelve a grabar y estos tests lo dicen. */
+const contrato = JSON.parse(readFileSync(new URL('./fixtures/contrato-ml.json', import.meta.url)));
+
+test('contrato real: domain_discovery y categoría tienen los campos que el Worker lee', () => {
+  assert.ok(contrato.casos.length >= 6, 'pocos rubros grabados');
+  for (const c of contrato.casos) {
+    const d = c.discovery[0];
+    for (const k of ['category_id', 'category_name', 'domain_name']) assert.equal(typeof d[k], 'string', `${c.busqueda}: discovery.${k}`);
+    assert.match(d.category_id, /^MLA\d+$/);
+    const cat = c.categoria;
+    assert.equal(cat.id, d.category_id);
+    assert.ok(Array.isArray(cat.path_from_root) && cat.path_from_root.every(p => typeof p.name === 'string'), `${c.busqueda}: path_from_root`);
+    assert.ok(Number.isFinite(cat.settings?.max_title_length) && cat.settings.max_title_length >= 30, `${c.busqueda}: max_title_length`);
+    assert.ok(Number.isFinite(cat.settings?.max_pictures_per_item), `${c.busqueda}: max_pictures_per_item`);
+    assert.ok(cat.settings?.minimum_price === undefined || cat.settings.minimum_price === null || Number.isFinite(cat.settings.minimum_price), `${c.busqueda}: minimum_price`);
+  }
+});
+
+test('contrato real: elegirAtributos con los atributos de 8 categorías reales, nuevo y usado', () => {
+  for (const c of contrato.casos) {
+    assert.ok(Array.isArray(c.atributos) && c.atributos.length > 10, `${c.busqueda}: atributos`);
+    for (const condicion of ['nuevo', 'usado']) {
+      const el = elegirAtributos(c.atributos, condicion);
+      assert.ok(el.length > 0, `${c.busqueda}/${condicion}: vacío`);
+      assert.equal(new Set(el.map(a => a.id)).size, el.length, `${c.busqueda}/${condicion}: ids repetidos`);
+      assert.ok(el.filter(a => !a.requerido).length <= 12);
+      for (const a of el) {
+        assert.equal(typeof a.id, 'string');
+        assert.equal(typeof a.nombre, 'string', `${c.busqueda}: ${a.id} sin nombre`);
+        assert.equal(typeof a.tipo, 'string', `${c.busqueda}: ${a.id} sin value_type`);
+        assert.ok(Array.isArray(a.opciones) && Array.isArray(a.unidades));
+        assert.ok(a.opciones.every(o => o.id && o.nombre), `${c.busqueda}: ${a.id} opción rara`);
+      }
+      // lo que ML marca como obligatorio para esa condición tiene que aparecer
+      const obligatorios = c.atributos.filter(a => { const t = a.tags || {}; return (t.required || t.catalog_required || t.conditional_required || (condicion === 'nuevo' && t.new_required)) && !t.read_only && !t.fixed && !t.inferred && !['ITEM_CONDITION', 'EMPTY_GTIN_REASON', 'SELLER_SKU'].includes(a.id); });
+      const ids = new Set(el.map(a => a.id));
+      assert.ok(obligatorios.every(a => ids.has(a.id)), `${c.busqueda}/${condicion}: falta un obligatorio`);
+    }
+  }
+});
+
+test('contrato real: atributoParaML arma un atributo válido con cada opción real', () => {
+  for (const c of contrato.casos) {
+    for (const a of elegirAtributos(c.atributos, 'usado').filter(x => x.opciones.length)) {
+      const o = a.opciones[0];
+      const r = atributoParaML(a, o.nombre);
+      assert.equal(r.id, a.id);
+      assert.equal(r.value_id, o.id, `${c.busqueda}: ${a.id} no encontró su propia opción`);
+    }
+  }
+});
+
 console.log(`\n${n} tests en verde`);

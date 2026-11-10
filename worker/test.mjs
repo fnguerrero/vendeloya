@@ -156,6 +156,48 @@ test('separarCausas: los avisos no bloquean, los errores sí', () => {
   assert.deepEqual(separarCausas({ message: 'body.invalid_field_types', cause: [] }).errores, ['body.invalid_field_types']);
 });
 
+test('separarCausas: el aviso de ME1 con Mercado Envíos 2 elegido no dice que el envío queda a acordar', () => {
+  // Validado contra ML real (09/11/2026): cochecito y bicicleta con me2 validan y traen igual lost_me1_by_user.
+  const me1 = { type: 'warning', code: 'shipping.lost_me1_by_user', message: 'User has not mode me1' };
+  const conMe2 = separarCausas({ cause: [me1] }, { envio: 'me2' });
+  assert.equal(conMe2.avisos.length, 1);
+  assert.match(conMe2.avisos[0], /No afecta al envío por Mercado Envíos 2/);
+  assert.doesNotMatch(conMe2.avisos[0], /a acordar/);
+  // Con retiro (o sin dato) sigue el aviso de siempre.
+  assert.match(separarCausas({ cause: [me1] }, { envio: 'retiro' }).avisos[0], /a acordar con el comprador/);
+  assert.match(separarCausas({ cause: [me1] }).avisos[0], /a acordar con el comprador/);
+});
+
+test('separarCausas: si se perdió ME2 (heladera), un solo aviso claro y sin el de ME1', () => {
+  const r = separarCausas({ cause: [
+    { type: 'warning', code: 'shipping.lost_me1_by_user', message: 'User has not mode me1' },
+    { type: 'warning', code: 'shipping.lost_me2_by_intersected_logistics', message: 'Item lost me2 by intersected logistics' }
+  ] }, { envio: 'me2' });
+  assert.equal(r.avisos.length, 1);
+  assert.match(r.avisos[0], /Mercado Envíos no puede llevar este producto/);
+  assert.match(r.avisos[0], /a acordar con el comprador/);
+  assert.match(r.avisos[0], /Revisá el paquete o ofrecé retiro/);
+  assert.doesNotMatch(r.avisos[0], /intersected|\[shipping/);
+});
+
+test('envío gratis: la app nunca lo activa sola y el aviso de costo mayor que la venta se entiende', () => {
+  const aviso = { type: 'warning', code: 'shipping.free_shipping.cost_exceeded', message: 'Free shipping costs exceeds sale' };
+  const r = separarCausas({ cause: [aviso] }, { envio: 'me2' });
+  assert.deepEqual(r.errores, []);
+  assert.match(r.avisos[0], /costo del envío gratis supera lo que cobrás/);
+  assert.match(r.avisos[0], /Subí el precio o ofrecé retiro/);
+  assert.doesNotMatch(r.avisos[0], /exceeds|\[shipping/);
+  // ni con precio alto ni con paquete: free_shipping solo es true si Nico lo pide en la revisión
+  const paquete = { pesoG: '1500', largoCm: '40', anchoCm: '30', altoCm: '15' };
+  for (const userProducts of [true, false]) {
+    for (const envio of ['retiro', 'me2']) {
+      const it = armarItem({ ...base, precio: 900000, envio, paquete }, { userProducts });
+      assert.ok(!it.shipping || it.shipping.free_shipping !== true, `${envio}/${userProducts}`);
+    }
+  }
+  assert.equal(armarItem({ ...base, envio: 'me2', envioGratis: true, paquete }, { userProducts: true }).shipping.free_shipping, true);
+});
+
 test('armarItem: solo retiro en persona', () => {
   assert.equal(armarItem(base, { userProducts: true }).shipping, undefined);
   assert.deepEqual(armarItem({ ...base, envio: 'retiro' }, { userProducts: true }).shipping,
@@ -720,11 +762,45 @@ test('contrato real: elegirAtributos con los atributos de 8 categorías reales, 
         assert.ok(a.opciones.every(o => o.id && o.nombre), `${c.busqueda}: ${a.id} opción rara`);
       }
       // lo que ML marca como obligatorio para esa condición tiene que aparecer
-      const obligatorios = c.atributos.filter(a => { const t = a.tags || {}; return (t.required || t.catalog_required || t.conditional_required || (condicion === 'nuevo' && t.new_required)) && !t.read_only && !t.fixed && !t.inferred && !['ITEM_CONDITION', 'EMPTY_GTIN_REASON', 'SELLER_SKU'].includes(a.id); });
+      const obligatorios = c.atributos.filter(a => { const t = a.tags || {}; return (t.required || t.catalog_required || t.conditional_required || (condicion === 'nuevo' && t.new_required)) && !t[condicion === 'nuevo' ? 'new_hidden' : 'used_hidden'] && !t.read_only && !t.fixed && !t.inferred && !['ITEM_CONDITION', 'EMPTY_GTIN_REASON', 'SELLER_SKU'].includes(a.id); });
       const ids = new Set(el.map(a => a.id));
       assert.ok(obligatorios.every(a => ids.has(a.id)), `${c.busqueda}/${condicion}: falta un obligatorio`);
     }
   }
+});
+
+test('contrato real: GRADING (used_hidden) no se pide en auriculares ni heladera usados; lo oculto nunca se elige', () => {
+  const ocultoPara = { nuevo: 'new_hidden', usado: 'used_hidden' };
+  for (const c of contrato.casos) {
+    for (const condicion of ['nuevo', 'usado']) {
+      const ids = new Set(elegirAtributos(c.atributos, condicion).map(a => a.id));
+      for (const a of c.atributos) {
+        if (a.tags?.[ocultoPara[condicion]]) assert.ok(!ids.has(a.id), `${c.busqueda}/${condicion}: ${a.id} está oculto para esa condición`);
+      }
+    }
+  }
+  for (const rubro of ['auriculares bluetooth', 'heladera no frost']) {
+    const c = contrato.casos.find(x => x.busqueda === rubro);
+    assert.ok(c.atributos.some(a => a.id === 'GRADING' && a.tags?.used_hidden), `${rubro}: el fixture ya no tiene GRADING used_hidden`);
+    assert.ok(!elegirAtributos(c.atributos, 'usado').some(a => a.id === 'GRADING'), `${rubro}: GRADING en usado`);
+  }
+  // Una condición sin tag oculto no pierde atributos (reacondicionado no usa used_hidden).
+  const hid = [{ id: 'GRADING', name: 'Gradación', value_type: 'list', tags: { used_hidden: true, conditional_required: true }, values: [] }];
+  assert.equal(elegirAtributos(hid, 'usado').length, 0);
+  assert.equal(elegirAtributos(hid, 'reacondicionado').length, 1);
+});
+
+test('aplicarDefaults: UNITS_PER_PACK vacío va con 1 (ML corrige 10 a 1); un valor ya cargado no se pisa', () => {
+  const r = aplicarDefaults([
+    { id: 'UNITS_PER_PACK', tipo: 'number', valor: '', opciones: [] },
+    { id: 'UNITS_PER_PACK', tipo: 'number', valor: '6', opciones: [] }
+  ]);
+  assert.equal(r[0].valor, '1');
+  assert.equal(r[1].valor, '6');
+  // y el contrato real de la mesa ratona: el atributo llega al ítem como 1
+  const mesa = contrato.casos.find(x => x.busqueda === 'mesa ratona de madera');
+  const el = aplicarDefaults(elegirAtributos(mesa.atributos, 'usado'));
+  assert.equal(el.find(a => a.id === 'UNITS_PER_PACK').valor, '1');
 });
 
 test('contrato real: atributoParaML arma un atributo válido con cada opción real', () => {

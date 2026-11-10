@@ -514,7 +514,7 @@ async function revisar(env, cuerpo) {
   }
   // Queda en el log del Worker (wrangler tail) por si hay que ver la respuesta cruda.
   console.log('validate 400', JSON.stringify(datos));
-  const { errores, avisos } = separarCausas(datos);
+  const { errores, avisos } = separarCausas(datos, { envio: p.envio });
   if (!errores.length) await marcarValidado(env.KV, sello);   // solo avisos: se puede publicar
   return { ok: !errores.length, fotos, item, errores, avisos };
 }

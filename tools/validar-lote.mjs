@@ -48,6 +48,7 @@ function pngDePrueba(lado = 800) {
 function valorDePrueba(a) {
   if (a.opciones.length) return a.opciones[0].nombre;
   if (a.id === 'GTIN') return '';   // sin código: el Worker agrega EMPTY_GTIN_REASON
+  if (a.id === 'UNITS_PER_PACK') return '1';   // una unidad por publicación; ML corrige cualquier otro número a 1
   if (a.tipo === 'number_unit') return `10 ${a.unidades[0] || ''}`.trim();
   if (a.tipo === 'number') return '10';
   if (a.tipo === 'boolean') return 'Sí';

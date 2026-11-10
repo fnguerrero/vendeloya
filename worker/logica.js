@@ -18,6 +18,13 @@ export const CONDICIONES = {
    código de barras se resuelve con EMPTY_GTIN_REASON si no hay. */
 const APARTE = new Set(['ITEM_CONDITION', 'EMPTY_GTIN_REASON', 'SELLER_SKU']);
 
+/* Tags de ML que ocultan un atributo según la condición del ítem (la lista de tags viene de las categorías reales). */
+const OCULTO_SEGUN_CONDICION = {
+  nuevo: ['new_hidden'],
+  usado: ['used_hidden'],
+  reacondicionado: ['refurbished_hidden', 'reconditioned_hidden']
+};
+
 /* Cuántos atributos opcionales se le piden a la IA, además de los obligatorios.
    Más atributos = mejor ficha técnica, pero más tokens y más cosas para revisar. */
 const MAX_OPCIONALES = 12;
@@ -32,9 +39,12 @@ const MAX_OPCIONES = 60;
  */
 export function elegirAtributos(atributos, condicion) {
   const esNuevo = condicion === 'nuevo';
+  const ocultos = OCULTO_SEGUN_CONDICION[condicion] || [];
   const usables = atributos.filter(a => {
     const t = a.tags || {};
-    return !t.read_only && !t.fixed && !t.inferred && !APARTE.has(a.id);
+    // Un atributo "<condición>_hidden" no se muestra para esa condición: ML pide borrarlo si se manda
+    // (GRADING en auriculares y heladera usados, validado contra ML real el 09/11/2026).
+    return !t.read_only && !t.fixed && !t.inferred && !APARTE.has(a.id) && !ocultos.some(h => t[h]);
   });
 
   const requerido = a => {
@@ -485,7 +495,9 @@ export function actualizarIndice(indice, resumen, max = MAX_HISTORIAL) {
 const POR_DEFECTO = {
   MODEL: 'NA',
   VALUE_ADDED_TAX: 'Exento',
-  IMPORT_DUTY: '0 %'
+  IMPORT_DUTY: '0 %',
+  // Cada publicación es de una unidad: ML corrige cualquier otro número a 1 (validate del 09/11/2026, mesa ratona).
+  UNITS_PER_PACK: '1'
 };
 
 /**
@@ -563,20 +575,32 @@ export function erroresML(respuesta) {
 /* Avisos que MercadoLibre manda en inglés y que se entienden mejor dichos en criollo. */
 const AVISOS_CONOCIDOS = {
   'shipping.lost_me1_by_user': 'Tu cuenta no tiene Mercado Envíos 1: el envío queda a acordar con el comprador.',
-  'shipping.lost_me2_by_catalog': 'Este producto no entra en Mercado Envíos (por tamaño o categoría): el envío queda a acordar con el comprador.'
+  'shipping.lost_me2_by_catalog': 'Este producto no entra en Mercado Envíos (por tamaño o categoría): el envío queda a acordar con el comprador.',
+  'shipping.lost_me2_by_intersected_logistics': 'Mercado Envíos no puede llevar este producto con el peso y las medidas cargados (no hay una logística que sirva para tu cuenta): el envío queda a acordar con el comprador. Revisá el paquete o ofrecé retiro en persona.',
+  'shipping.free_shipping.cost_exceeded': 'Atención: según MercadoLibre, el costo del envío gratis supera lo que cobrás por este producto. Subí el precio o ofrecé retiro en persona antes de publicar.'
 };
+
+/* ME1 es la modalidad antigua. Cuando se eligió Mercado Envíos 2, que la cuenta no tenga ME1 no cambia nada. */
+const AVISO_ME1_CON_ME2 = 'Tu cuenta no tiene Mercado Envíos 1 (la modalidad antigua). No afecta al envío por Mercado Envíos 2 que elegiste.';
 
 /**
  * El validador devuelve 400 tanto con errores como con avisos sueltos. Un aviso
  * (type "warning") no impide publicar: se muestra, pero no bloquea. Si la
  * respuesta no trae causas, el 400 es un error con su mensaje general.
+ * envio: el modo elegido ('me2', 'retiro'...), para decir el aviso de ME1 en su contexto.
  */
-export function separarCausas(respuesta) {
+export function separarCausas(respuesta, { envio } = {}) {
   const causas = Array.isArray(respuesta?.cause) ? respuesta.cause : [];
   if (!causas.length) return { errores: erroresML(respuesta), avisos: [] };
-  const texto = c => AVISOS_CONOCIDOS[c.code] || `${c.message}${c.code ? ` [${c.code}]` : ''}`;
+  const perdioMe2 = causas.some(c => /^shipping\.lost_me2_/.test(c.code || ''));
+  const texto = c => {
+    if (c.code === 'shipping.lost_me1_by_user' && envio === 'me2' && !perdioMe2) return AVISO_ME1_CON_ME2;
+    return AVISOS_CONOCIDOS[c.code] || `${c.message}${c.code ? ` [${c.code}]` : ''}`;
+  };
+  // Si se perdió ME2, el aviso de ME1 sobra: el de ME2 ya dice que el envío queda a acordar.
+  const sobra = c => c.code === 'shipping.lost_me1_by_user' && envio === 'me2' && perdioMe2;
   return {
     errores: causas.filter(c => c.type !== 'warning').map(texto),
-    avisos: causas.filter(c => c.type === 'warning').map(texto)
+    avisos: causas.filter(c => c.type === 'warning' && !sobra(c)).map(texto)
   };
 }

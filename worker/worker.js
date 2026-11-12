@@ -326,14 +326,26 @@ async function seguimiento(env, forzar = false) {
   const diagnostico = { visitas: { estado: null }, preguntas: { estado: null } };
   const visitas = {};
   try {
+    // /visits/items?ids= dio 400 validation_parameters con la cuenta real (12/11/2026): se prueba también
+    // /items/visits?ids=&date_from=&date_to= (visitas del último año, que cubre todo lo publicado hasta ahora).
+    const hasta = new Date();
+    const desde = new Date(hasta.getTime() - 365 * 864e5);
+    const fecha = d => `${d.toISOString().slice(0, 10)}T00:00:00.000-03:00`;
+    const intentos = [];
     for (const lote of lotes(ids, 50)) {
-      const { status, datos } = await ml(env, `/visits/items?ids=${lote.join(',')}`, { tolerar: [400, 403, 404] });
-      diagnostico.visitas.estado = status;
-      diagnostico.visitas.forma = Array.isArray(datos) ? 'lista' : datos === null ? 'vacío' : typeof datos;
-      if (status !== 200) { diagnostico.visitas.codigo = datos?.code || datos?.error || null; continue; }
-      Object.assign(visitas, leerVisitas(datos));
+      const ids50 = lote.join(',');
+      const vias = [['visits/items', `/visits/items?ids=${ids50}`],
+                    ['items/visits', `/items/visits?ids=${ids50}&date_from=${fecha(desde)}&date_to=${fecha(hasta)}`]];
+      for (const [via, ruta] of vias) {
+        const { status, datos } = await ml(env, ruta, { tolerar: [400, 403, 404] });
+        const leidas = status === 200 ? leerVisitas(datos) : {};
+        intentos.push({ via, estado: status, forma: Array.isArray(datos) ? 'lista' : datos === null ? 'vacío' : typeof datos,
+          codigo: status === 200 ? null : (datos?.code || datos?.error || null), mensaje: status === 200 ? null : String(datos?.message || '').slice(0, 160) });
+        if (Object.keys(leidas).length) { Object.assign(visitas, leidas); diagnostico.visitas.via = via; break; }
+      }
     }
-    diagnostico.visitas.conDatos = Object.keys(visitas).length;
+    const ultimo = intentos[intentos.length - 1] || {};
+    Object.assign(diagnostico.visitas, { estado: ultimo.estado ?? null, forma: ultimo.forma, codigo: ultimo.codigo, mensaje: ultimo.mensaje, intentos, conDatos: Object.keys(visitas).length });
   } catch (e) { console.log('visitas', e.message); diagnostico.visitas.error = e.message.slice(0, 120); }
   let preguntas = null;   // null = no se pudo consultar (distinto de cero preguntas)
   try {

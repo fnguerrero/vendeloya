@@ -824,6 +824,16 @@ test('leerVisitas: entiende el mapa documentado, la lista y el ítem suelto; des
   assert.deepEqual(leerVisitas([]), {});
 });
 
+test('separarCausas: la guía de talles de ropa y calzado se explica, sin el código técnico', () => {
+  for (const code of ['missing.fashion_grid.grid_id.values', 'invalid.fashion_grid.grid_id.values']) {
+    const r = separarCausas({ cause: [{ type: 'error', code, message: 'Attribute [SIZE_GRID_ID] is missing' }] });
+    assert.equal(r.errores.length, 1);
+    assert.match(r.errores[0], /guía de talles/);
+    assert.match(r.errores[0], /Publicala directo desde MercadoLibre/);
+    assert.doesNotMatch(r.errores[0], /SIZE_GRID_ID|fashion_grid/);
+  }
+});
+
 test('armarSeguimiento: preguntas null = no se pudo consultar, no "cero preguntas"', () => {
   const items = [{ id: 'MLA1', status: 'active', sold_quantity: 0, available_quantity: 1, price: 10 }];
   assert.equal(armarSeguimiento(items, {}, null).MLA1.preguntas, null);
@@ -855,7 +865,10 @@ await testA('Worker: preguntas y visitas con permisos bloqueados o formas distin
     if (ruta.startsWith('/items?ids=')) return responder(200, [
       { code: 200, body: { id: 'MLA1', status: 'active', sold_quantity: 0, available_quantity: 1, price: 100 } },
       { code: 200, body: { id: 'MLA2', status: 'active', sold_quantity: 0, available_quantity: 1, price: 200 } }]);
-    if (ruta.startsWith('/visits/items')) return modo === 'lista' ? responder(200, [{ item_id: 'MLA1', total_visits: 4 }, { item_id: 'MLA2', total_visits: 6 }])
+    // Con la cuenta real (12/11/2026) /visits/items dio 400 validation_parameters: el recurso por fechas sí responde en 'viejo400'.
+    if (modo === 'viejo400' && ruta.startsWith('/visits/items')) return responder(400, { code: 'validation_parameters', message: 'invalid parameters' });
+    if (modo === 'viejo400' && ruta.startsWith('/items/visits?ids=')) return responder(200, [{ item_id: 'MLA1', total_visits: 8 }, { item_id: 'MLA2', total_visits: 1 }]);
+    if (ruta.startsWith('/visits/items') || ruta.startsWith('/items/visits')) return modo === 'lista' ? responder(200, [{ item_id: 'MLA1', total_visits: 4 }, { item_id: 'MLA2', total_visits: 6 }])
       : modo === 'bloqueado' ? responder(403, bloqueo) : responder(200, { MLA1: 11, MLA2: 0 });
     if (ruta.startsWith('/my/received_questions/search')) return modo === 'nuevo-ok' ? responder(200, { questions: [{ id: 5, item_id: 'MLA1', text: 'Hola', date_created: 'x' }] }) : responder(403, bloqueo);
     if (ruta.startsWith('/questions/search?seller_id=77')) return modo === 'viejo-ok' ? responder(200, { questions: [{ id: 6, item_id: 'MLA2', text: 'Envían?', date_created: 'y' }] }) : responder(403, bloqueo);
@@ -907,6 +920,18 @@ await testA('Worker: preguntas y visitas con permisos bloqueados o formas distin
     assert.equal(r.registros.bbbb2222.visitas, 6);
     assert.equal(r.diagnostico.visitas.forma, 'lista');
     assert.equal(r.diagnostico.visitas.conDatos, 2);
+
+    // 4b) /visits/items da 400 (lo que pasó con la cuenta real): se prueba el recurso por fechas y se informa qué pasó con cada uno
+    modo = 'viejo400';
+    r = await llamar('GET', '/api/seguimiento?forzar=1');
+    assert.equal(r.registros.aaaa1111.visitas, 8);
+    assert.equal(r.registros.bbbb2222.visitas, 1);
+    assert.equal(r.diagnostico.visitas.via, 'items/visits');
+    assert.equal(r.diagnostico.visitas.intentos.length, 2);
+    assert.equal(r.diagnostico.visitas.intentos[0].estado, 400);
+    assert.equal(r.diagnostico.visitas.intentos[0].codigo, 'validation_parameters');
+    assert.equal(r.diagnostico.visitas.intentos[0].mensaje, 'invalid parameters');
+    assert.ok(llamadas.some(l => /^GET \/items\/visits\?ids=MLA1,MLA2&date_from=\d{4}-\d\d-\d\dT00:00:00\.000-03:00&date_to=/.test(l)));
 
     // 5) visitas como mapa documentado + preguntas por el recurso nuevo
     modo = 'nuevo-ok';

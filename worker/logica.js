@@ -607,11 +607,15 @@ export function erroresML(respuesta) {
     .map(c => `${c.type === 'warning' ? '(aviso) ' : ''}${c.message}${c.code ? ` [${c.code}]` : ''}`);
 }
 
+const AVISO_GRILLA = 'Esta categoría (ropa o calzado) exige una guía de talles de MercadoLibre y VendeloYa todavía no la arma. Publicala directo desde MercadoLibre o elegí otra categoría.';
+
 /* Avisos que MercadoLibre manda en inglés y que se entienden mejor dichos en criollo. */
 const AVISOS_CONOCIDOS = {
   'shipping.lost_me1_by_user': 'Tu cuenta no tiene Mercado Envíos 1: el envío queda a acordar con el comprador.',
   'shipping.lost_me2_by_catalog': 'Este producto no entra en Mercado Envíos (por tamaño o categoría): el envío queda a acordar con el comprador.',
   'shipping.lost_me2_by_intersected_logistics': 'Mercado Envíos no puede llevar este producto con el peso y las medidas cargados (no hay una logística que sirva para tu cuenta): el envío queda a acordar con el comprador. Revisá el paquete o ofrecé retiro en persona.',
+  'missing.fashion_grid.grid_id.values': AVISO_GRILLA,
+  'invalid.fashion_grid.grid_id.values': AVISO_GRILLA,
   'shipping.free_shipping.cost_exceeded': 'Atención: según MercadoLibre, el costo del envío gratis supera lo que cobrás por este producto. Subí el precio o ofrecé retiro en persona antes de publicar.'
 };
 

@@ -326,16 +326,13 @@ async function seguimiento(env, forzar = false) {
   const diagnostico = { visitas: { estado: null }, preguntas: { estado: null } };
   const visitas = {};
   try {
-    // /visits/items?ids= dio 400 validation_parameters con la cuenta real (12/11/2026): se prueba también
-    // /items/visits?ids=&date_from=&date_to= (visitas del último año, que cubre todo lo publicado hasta ahora).
-    const hasta = new Date();
-    const desde = new Date(hasta.getTime() - 365 * 864e5);
-    const fecha = d => `${d.toISOString().slice(0, 10)}T00:00:00.000-03:00`;
+    // Con la cuenta real (12/11/2026) ML contestó 400 "maximum amount of items to query is 1": /visits/items
+    // admite UN ítem por llamada. Si falla, se prueba el total de los últimos 90 días de ese ítem.
     const intentos = [];
-    for (const lote of lotes(ids, 50)) {
-      const ids50 = lote.join(',');
-      const vias = [['visits/items', `/visits/items?ids=${ids50}`],
-                    ['items/visits', `/items/visits?ids=${ids50}&date_from=${fecha(desde)}&date_to=${fecha(hasta)}`]];
+    for (const lote of lotes(ids, 1)) {
+      const id1 = encodeURIComponent(lote[0]);
+      const vias = [['visits/items', `/visits/items?ids=${id1}`],
+                    ['visits/time_window', `/items/${id1}/visits/time_window?last=90&unit=day`]];
       for (const [via, ruta] of vias) {
         const { status, datos } = await ml(env, ruta, { tolerar: [400, 403, 404] });
         const leidas = status === 200 ? leerVisitas(datos) : {};

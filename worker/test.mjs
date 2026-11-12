@@ -865,11 +865,17 @@ await testA('Worker: preguntas y visitas con permisos bloqueados o formas distin
     if (ruta.startsWith('/items?ids=')) return responder(200, [
       { code: 200, body: { id: 'MLA1', status: 'active', sold_quantity: 0, available_quantity: 1, price: 100 } },
       { code: 200, body: { id: 'MLA2', status: 'active', sold_quantity: 0, available_quantity: 1, price: 200 } }]);
-    // Con la cuenta real (12/11/2026) /visits/items dio 400 validation_parameters: el recurso por fechas sí responde en 'viejo400'.
-    if (modo === 'viejo400' && ruta.startsWith('/visits/items')) return responder(400, { code: 'validation_parameters', message: 'invalid parameters' });
-    if (modo === 'viejo400' && ruta.startsWith('/items/visits?ids=')) return responder(200, [{ item_id: 'MLA1', total_visits: 8 }, { item_id: 'MLA2', total_visits: 1 }]);
-    if (ruta.startsWith('/visits/items') || ruta.startsWith('/items/visits')) return modo === 'lista' ? responder(200, [{ item_id: 'MLA1', total_visits: 4 }, { item_id: 'MLA2', total_visits: 6 }])
-      : modo === 'bloqueado' ? responder(403, bloqueo) : responder(200, { MLA1: 11, MLA2: 0 });
+    // Con la cuenta real (12/11/2026): /visits/items?ids=A,B da 400 "maximum amount of items to query is 1" (un ítem por llamada).
+    const idVisita = (/^\/visits\/items\?ids=([^&]+)/.exec(ruta) || /^\/items\/([^/]+)\/visits\/time_window/.exec(ruta) || [])[1];
+    if (ruta.startsWith('/visits/items')) {
+      if (idVisita.includes(',')) return responder(400, { code: 'validation_parameters', message: 'maximum amount of items to query is 1' });
+      if (modo === 'bloqueado') return responder(403, bloqueo);
+      if (modo === 'ventana') return responder(400, { code: 'validation_parameters', message: 'invalid parameters' });
+      if (modo === 'lista') return responder(200, [{ item_id: idVisita, total_visits: { MLA1: 4, MLA2: 6 }[idVisita] }]);
+      return responder(200, { [idVisita]: { MLA1: 11, MLA2: 0 }[idVisita] });
+    }
+    if (ruta.includes('/visits/time_window')) return modo === 'ventana' ? responder(200, { item_id: idVisita, total_visits: { MLA1: 8, MLA2: 1 }[idVisita], results: [] })
+      : modo === 'bloqueado' ? responder(403, bloqueo) : responder(404, { message: 'no simulada' });
     if (ruta.startsWith('/my/received_questions/search')) return modo === 'nuevo-ok' ? responder(200, { questions: [{ id: 5, item_id: 'MLA1', text: 'Hola', date_created: 'x' }] }) : responder(403, bloqueo);
     if (ruta.startsWith('/questions/search?seller_id=77')) return modo === 'viejo-ok' ? responder(200, { questions: [{ id: 6, item_id: 'MLA2', text: 'Envían?', date_created: 'y' }] }) : responder(403, bloqueo);
     if (ruta === '/answers') return responder(403, bloqueo);
@@ -920,18 +926,21 @@ await testA('Worker: preguntas y visitas con permisos bloqueados o formas distin
     assert.equal(r.registros.bbbb2222.visitas, 6);
     assert.equal(r.diagnostico.visitas.forma, 'lista');
     assert.equal(r.diagnostico.visitas.conDatos, 2);
+    // un ítem por llamada: nunca "MLA1,MLA2" juntos (ML contesta 400 "maximum amount of items to query is 1")
+    assert.ok(!llamadas.some(l => /^GET \/visits\/items\?ids=[^&]*,/.test(l)));
+    assert.ok(llamadas.includes('GET /visits/items?ids=MLA1') && llamadas.includes('GET /visits/items?ids=MLA2'));
 
-    // 4b) /visits/items da 400 (lo que pasó con la cuenta real): se prueba el recurso por fechas y se informa qué pasó con cada uno
-    modo = 'viejo400';
+    // 4b) /visits/items falla con 400: se prueba el total de 90 días de cada ítem y se informa qué pasó con cada intento
+    modo = 'ventana';
     r = await llamar('GET', '/api/seguimiento?forzar=1');
     assert.equal(r.registros.aaaa1111.visitas, 8);
     assert.equal(r.registros.bbbb2222.visitas, 1);
-    assert.equal(r.diagnostico.visitas.via, 'items/visits');
-    assert.equal(r.diagnostico.visitas.intentos.length, 2);
+    assert.equal(r.diagnostico.visitas.via, 'visits/time_window');
+    assert.equal(r.diagnostico.visitas.intentos.length, 4);
     assert.equal(r.diagnostico.visitas.intentos[0].estado, 400);
     assert.equal(r.diagnostico.visitas.intentos[0].codigo, 'validation_parameters');
     assert.equal(r.diagnostico.visitas.intentos[0].mensaje, 'invalid parameters');
-    assert.ok(llamadas.some(l => /^GET \/items\/visits\?ids=MLA1,MLA2&date_from=\d{4}-\d\d-\d\dT00:00:00\.000-03:00&date_to=/.test(l)));
+    assert.ok(llamadas.includes('GET /items/MLA1/visits/time_window?last=90&unit=day'));
 
     // 5) visitas como mapa documentado + preguntas por el recurso nuevo
     modo = 'nuevo-ok';

@@ -10,7 +10,7 @@ import {
   estadoPublicacion, armarSeguimiento, cambioPublicacion, validarRespuesta, elegirParecidos,
   leerComisiones, calcularGanancia, precioDeEquilibrio,
   leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete,
-  huellaItem, paraHuella, marcarValidado, estaValidado, gastarValidacion
+  huellaItem, paraHuella, marcarValidado, estaValidado, gastarValidacion, leerVisitas
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -811,6 +811,117 @@ test('contrato real: atributoParaML arma un atributo válido con cada opción re
       assert.equal(r.id, a.id);
       assert.equal(r.value_id, o.id, `${c.busqueda}: ${a.id} no encontró su propia opción`);
     }
+  }
+});
+
+test('leerVisitas: entiende el mapa documentado, la lista y el ítem suelto; descarta lo raro', () => {
+  assert.deepEqual(leerVisitas({ MLA1: 12, MLA2: 0 }), { MLA1: 12, MLA2: 0 });
+  assert.deepEqual(leerVisitas([{ item_id: 'MLA1', total_visits: 7 }, { id: 'MLA2', visits: 3 }]), { MLA1: 7, MLA2: 3 });
+  assert.deepEqual(leerVisitas({ item_id: 'MLA1', total_visits: 9, results: [] }), { MLA1: 9 });
+  assert.deepEqual(leerVisitas({ MLA1: { total_visits: 5 } }), { MLA1: 5 });
+  assert.deepEqual(leerVisitas({ message: 'Not found', status: 404, MLA1: null }), {});
+  assert.deepEqual(leerVisitas(null), {});
+  assert.deepEqual(leerVisitas([]), {});
+});
+
+test('armarSeguimiento: preguntas null = no se pudo consultar, no "cero preguntas"', () => {
+  const items = [{ id: 'MLA1', status: 'active', sold_quantity: 0, available_quantity: 1, price: 10 }];
+  assert.equal(armarSeguimiento(items, {}, null).MLA1.preguntas, null);
+  assert.equal(armarSeguimiento(items, {}, []).MLA1.preguntas, 0);
+});
+
+test('elegirAtributos: nunca pide SIZE_GRID_ID ni ids de grilla (ML los asigna y rechaza el texto libre)', () => {
+  const zap = contrato.casos.find(x => x.categoria.id === 'MLA109027');
+  assert.ok(zap.atributos.some(a => a.id === 'SIZE_GRID_ID' && a.value_type === 'grid_id'), 'el fixture ya no tiene SIZE_GRID_ID');
+  for (const condicion of ['nuevo', 'usado']) {
+    const ids = elegirAtributos(zap.atributos, condicion).map(a => a.id);
+    assert.ok(!ids.includes('SIZE_GRID_ID') && !ids.includes('SIZE_GRID_ROW_ID'), condicion);
+    assert.ok(ids.includes('SIZE') && ids.includes('GENDER'), 'el talle y el género siguen yendo');
+  }
+  for (const c of contrato.casos) for (const a of elegirAtributos(c.atributos, 'usado')) assert.ok(!/grid/.test(a.tipo), `${c.busqueda}: ${a.id} es de grilla`);
+});
+
+await testA('Worker: preguntas y visitas con permisos bloqueados o formas distintas, sin tocar nada real', async () => {
+  const { default: worker } = await import('./worker.js');
+  const fetchOriginal = globalThis.fetch;
+  const llamadas = [];
+  let modo = 'bloqueado';
+  const bloqueo = { blocked_by: 'PolicyAgent', code: 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES', message: 'At least one policy returned UNAUTHORIZED.', status: 403 };
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    llamadas.push(`${init.method || 'GET'} ${ruta}`);
+    const responder = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (ruta === '/users/me') return responder(200, { id: 77, nickname: 'prueba', tags: [] });
+    if (ruta.startsWith('/items?ids=')) return responder(200, [
+      { code: 200, body: { id: 'MLA1', status: 'active', sold_quantity: 0, available_quantity: 1, price: 100 } },
+      { code: 200, body: { id: 'MLA2', status: 'active', sold_quantity: 0, available_quantity: 1, price: 200 } }]);
+    if (ruta.startsWith('/visits/items')) return modo === 'lista' ? responder(200, [{ item_id: 'MLA1', total_visits: 4 }, { item_id: 'MLA2', total_visits: 6 }])
+      : modo === 'bloqueado' ? responder(403, bloqueo) : responder(200, { MLA1: 11, MLA2: 0 });
+    if (ruta.startsWith('/my/received_questions/search')) return modo === 'nuevo-ok' ? responder(200, { questions: [{ id: 5, item_id: 'MLA1', text: 'Hola', date_created: 'x' }] }) : responder(403, bloqueo);
+    if (ruta.startsWith('/questions/search?seller_id=77')) return modo === 'viejo-ok' ? responder(200, { questions: [{ id: 6, item_id: 'MLA2', text: 'Envían?', date_created: 'y' }] }) : responder(403, bloqueo);
+    if (ruta === '/answers') return responder(403, bloqueo);
+    return responder(404, { message: `ruta no simulada: ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 77, vence: Date.now() + 3600e3 }));
+    await kv.put('regs', JSON.stringify([
+      { id: 'aaaa1111', titulo: 'Uno', estado: 'publicada', mlId: 'MLA1' }, { id: 'bbbb2222', titulo: 'Dos', estado: 'publicada', mlId: 'MLA2' }]));
+    const env = { KV: kv, APP_SECRET: 'secreto' };
+    const llamar = async (metodo, ruta, cuerpo) => {
+      const r = await worker.fetch(new Request(`https://w.test${ruta}`, { method: metodo, body: cuerpo ? JSON.stringify(cuerpo) : undefined,
+        headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto', 'content-type': 'application/json' } }), env);
+      return { status: r.status, ...(await r.json()) };
+    };
+
+    // 1) los dos recursos de preguntas bloqueados: error claro con el permiso a activar, y se probaron los dos
+    let r = await llamar('GET', '/api/preguntas');
+    assert.equal(r.status, 403);
+    assert.match(r.error, /Comunicaciones pre y post venta/);
+    assert.match(r.error, /Volver a conectar/);
+    assert.ok(llamadas.some(l => l.startsWith('GET /my/received_questions')) && llamadas.some(l => l.startsWith('GET /questions/search?seller_id=77')));
+
+    // 2) el recurso nuevo bloqueado pero el documentado por vendedor anda: se usa ese
+    modo = 'viejo-ok';
+    r = await llamar('GET', '/api/preguntas');
+    assert.equal(r.status, 200);
+    assert.equal(r.preguntas.length, 1);
+    assert.equal(r.preguntas[0].registroId, 'bbbb2222');
+
+    // 3) seguimiento con todo bloqueado: el estado sale, visitas y preguntas en null (no en 0) y el diagnóstico dice por qué
+    modo = 'bloqueado';
+    r = await llamar('GET', '/api/seguimiento?forzar=1');
+    assert.equal(r.status, 200);
+    assert.equal(r.registros.aaaa1111.estado, 'activa');
+    assert.equal(r.registros.aaaa1111.visitas, null);
+    assert.equal(r.registros.aaaa1111.preguntas, null);
+    assert.equal(r.diagnostico.visitas.estado, 403);
+    assert.equal(r.diagnostico.visitas.codigo, 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES');
+    assert.equal(r.diagnostico.preguntas.estado, 403);
+    assert.ok(!JSON.stringify(r.diagnostico).includes('"t"'), 'el diagnóstico no lleva token');
+
+    // 4) visitas como lista [{item_id,total_visits}] y preguntas por el recurso nuevo
+    modo = 'lista';
+    r = await llamar('GET', '/api/seguimiento?forzar=1');
+    assert.equal(r.registros.aaaa1111.visitas, 4);
+    assert.equal(r.registros.bbbb2222.visitas, 6);
+    assert.equal(r.diagnostico.visitas.forma, 'lista');
+    assert.equal(r.diagnostico.visitas.conDatos, 2);
+
+    // 5) visitas como mapa documentado + preguntas por el recurso nuevo
+    modo = 'nuevo-ok';
+    r = await llamar('GET', '/api/seguimiento?forzar=1');
+    assert.equal(r.registros.aaaa1111.visitas, 11);
+    assert.equal(r.registros.aaaa1111.preguntas, 1);
+    assert.equal(r.registros.bbbb2222.preguntas, 0);
+    assert.equal(r.diagnostico.preguntas.via, 'my/received_questions');
+
+    // 6) responder con el permiso bloqueado: mensaje claro (esto simula el rechazo, no se envía nada real)
+    r = await llamar('POST', '/api/preguntas/5/responder', { texto: 'Sí, hay stock' });
+    assert.equal(r.status, 403);
+    assert.match(r.error, /Comunicaciones pre y post venta/);
+  } finally {
+    globalThis.fetch = fetchOriginal;
   }
 });
 

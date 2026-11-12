@@ -44,7 +44,10 @@ export function elegirAtributos(atributos, condicion) {
     const t = a.tags || {};
     // Un atributo "<condición>_hidden" no se muestra para esa condición: ML pide borrarlo si se manda
     // (GRADING en auriculares y heladera usados, validado contra ML real el 09/11/2026).
-    return !t.read_only && !t.fixed && !t.inferred && !APARTE.has(a.id) && !ocultos.some(h => t[h]);
+    // Los ids de grilla de talles (SIZE_GRID_ID…) los asigna ML al armar la guía de talles: un texto libre ahí
+    // se rechaza (invalid.fashion_grid.grid_id.values, validado contra ML real el 12/11/2026, zapatillas).
+    const deGrilla = a.value_type === 'grid_id' || a.value_type === 'grid_row_id';
+    return !t.read_only && !t.fixed && !t.inferred && !APARTE.has(a.id) && !deGrilla && !ocultos.some(h => t[h]);
   });
 
   const requerido = a => {
@@ -329,7 +332,39 @@ export function estadoPublicacion(item) {
   return item.status;
 }
 
-/** Junta ítems, visitas y preguntas sin responder en un resumen por id de MercadoLibre. */
+/**
+ * Las visitas por ítem, venga como venga: { MLA1: 12 } (lo documentado), [{ item_id, total_visits }]
+ * o { item_id, total_visits } suelto. Lo que no se entiende se descarta; devuelve { id: número }.
+ */
+export function leerVisitas(datos) {
+  const mapa = {};
+  const poner = (id, n) => {
+    if (!/^[A-Z]{3}\d+$/.test(String(id)) || n == null || n === '' || !Number.isFinite(Number(n))) return;   // solo ids de ítem (no "status", "code"…)
+    mapa[id] = Number(n);
+  };
+  const cuenta = x => (x && typeof x === 'object' ? (x.total_visits ?? x.visits ?? x.total) : x);
+  if (Array.isArray(datos)) for (const x of datos) poner(x?.item_id ?? x?.id, cuenta(x));
+  else if (datos && typeof datos === 'object') {
+    if (datos.item_id) poner(datos.item_id, cuenta(datos));
+    else for (const [id, v] of Object.entries(datos)) poner(id, cuenta(v));
+  }
+  return mapa;
+}
+
+/** ¿MercadoLibre rechazó por permisos de la app (PolicyAgent) y no por el token? */
+export function bloqueoPorPermisos(e) {
+  return e?.status === 403 && (e.ml?.blocked_by === 'PolicyAgent' || /PA_UNAUTHORIZED/.test(e.ml?.code || ''));
+}
+
+/** Qué hacer cuando MercadoLibre no deja leer o responder preguntas con el permiso actual de la app. */
+export function mensajePermisoPreguntas(accion = 'leer') {
+  return `MercadoLibre no le deja a la app ${accion} las preguntas: falta el permiso. En developers.mercadolibre.com.ar → Mis aplicaciones → tu app → Editar → Permisos, poné «Comunicaciones pre y post venta» en Lectura y escritura, guardá y después tocá «Volver a conectar» en Ajustes.`;
+}
+
+/**
+ * Junta ítems, visitas y preguntas sin responder en un resumen por id de MercadoLibre.
+ * preguntas === null significa "no se pudo consultar" (no es lo mismo que cero preguntas).
+ */
 export function armarSeguimiento(items, visitas = {}, preguntas = []) {
   const porItem = {};
   for (const it of items) {
@@ -340,10 +375,10 @@ export function armarSeguimiento(items, visitas = {}, preguntas = []) {
       disponibles: Number.isFinite(it.available_quantity) ? it.available_quantity : null,
       precio: Number.isFinite(it.price) ? it.price : null,
       visitas: Number.isFinite(visitas[it.id]) ? visitas[it.id] : null,
-      preguntas: 0
+      preguntas: preguntas === null ? null : 0
     };
   }
-  for (const q of preguntas) if (porItem[q?.item_id]) porItem[q.item_id].preguntas++;
+  for (const q of preguntas || []) if (porItem[q?.item_id]) porItem[q.item_id].preguntas++;
   return porItem;
 }
 

@@ -16,3 +16,6 @@ console.log('estados:', JSON.stringify(estados));
 console.log('forma de un registro:', JSON.stringify(regs[0] ? forma(regs[0]) : '(ninguno)'));
 const faltan = regs.filter(x => x.visitas === null).length;
 console.log(`con visitas informadas: ${regs.length - faltan} de ${regs.length}`);
+console.log(`con preguntas informadas: ${regs.filter(x => x.preguntas !== null).length} de ${regs.length} (null = MercadoLibre no dejó consultarlas)`);
+// Qué respondió MercadoLibre a las visitas y a las preguntas: solo códigos y formas.
+console.log('diagnóstico:', JSON.stringify(r.datos.diagnostico || '(el Worker desplegado todavía no lo trae)'));

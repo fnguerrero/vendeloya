@@ -29,7 +29,7 @@
 
 import { identificar, completarAtributos, responderPregunta as borradorConIA } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -321,23 +321,35 @@ async function seguimiento(env, forzar = false) {
     const { datos } = await ml(env, `/items?ids=${lote.join(',')}&attributes=id,status,sub_status,sold_quantity,available_quantity,price`);
     for (const r of datos || []) if (r.code === 200 && r.body) items.push(r.body);
   }
+  // Visitas y preguntas son extras: si fallan, el estado sale igual, y el motivo queda en `diagnostico`
+  // (solo códigos y formas, nunca datos de la cuenta) para poder ver qué respondió MercadoLibre.
+  const diagnostico = { visitas: { estado: null }, preguntas: { estado: null } };
   const visitas = {};
   try {
     for (const lote of lotes(ids, 50)) {
-      const { datos } = await ml(env, `/visits/items?ids=${lote.join(',')}`);
-      Object.assign(visitas, datos || {});
+      const { status, datos } = await ml(env, `/visits/items?ids=${lote.join(',')}`, { tolerar: [400, 403, 404] });
+      diagnostico.visitas.estado = status;
+      diagnostico.visitas.forma = Array.isArray(datos) ? 'lista' : datos === null ? 'vacío' : typeof datos;
+      if (status !== 200) { diagnostico.visitas.codigo = datos?.code || datos?.error || null; continue; }
+      Object.assign(visitas, leerVisitas(datos));
     }
-  } catch (e) { console.log('visitas', e.message); }
-  let preguntas = [];
+    diagnostico.visitas.conDatos = Object.keys(visitas).length;
+  } catch (e) { console.log('visitas', e.message); diagnostico.visitas.error = e.message.slice(0, 120); }
+  let preguntas = null;   // null = no se pudo consultar (distinto de cero preguntas)
   try {
-    const { datos } = await ml(env, '/my/received_questions/search?status=UNANSWERED&limit=50&api_version=4');
-    preguntas = datos?.questions || [];
-  } catch (e) { console.log('preguntas', e.message); }
+    const r = await preguntasSinResponder(env);
+    preguntas = r.preguntas;
+    diagnostico.preguntas = { estado: 200, via: r.via };
+  } catch (e) {
+    console.log('preguntas', e.message);
+    diagnostico.preguntas = { estado: e.status || null, codigo: e.ml?.code || null };
+  }
 
   const porItem = armarSeguimiento(items, visitas, preguntas);
   const resultado = {
     registros: Object.fromEntries(pubs.filter(p => porItem[p.mlId]).map(p => [p.id, { ...porItem[p.mlId], mlId: p.mlId }])),
-    consultado
+    consultado,
+    diagnostico
   };
   await env.KV.put('seguimiento', JSON.stringify(resultado), { expirationTtl: SEGUIMIENTO_TTL });
   return resultado;
@@ -345,14 +357,28 @@ async function seguimiento(env, forzar = false) {
 
 /* ---------- preguntas y acciones sobre lo publicado ---------- */
 
+/**
+ * Las preguntas sin responder (solo lectura). Primero el recurso nuevo (/my/received_questions); si
+ * MercadoLibre lo bloquea por permisos, el documentado por vendedor (/questions/search?seller_id=…).
+ * Si los dos están bloqueados, el error dice qué permiso activar.
+ */
+async function preguntasSinResponder(env) {
+  const nuevo = await ml(env, '/my/received_questions/search?status=UNANSWERED&limit=50&api_version=4', { tolerar: [403] });
+  if (nuevo.status !== 403) return { preguntas: nuevo.datos?.questions || [], via: 'my/received_questions' };
+  const yo = await usuario(env);
+  const viejo = await ml(env, `/questions/search?seller_id=${encodeURIComponent(yo.id)}&status=UNANSWERED&limit=50&api_version=4`, { tolerar: [403] });
+  if (viejo.status !== 403) return { preguntas: viejo.datos?.questions || [], via: 'questions/search' };
+  throw Object.assign(new Error(mensajePermisoPreguntas('leer')), { status: 403, ml: nuevo.datos });
+}
+
 /** Preguntas sin responder, cada una con el registro de la app al que pertenece (si lo hay). */
 async function preguntas(env) {
   const pubs = await registros.publicadas(env);
   const porMl = new Map(pubs.map(p => [p.mlId, p.id]));
   const titulos = new Map((await registros.listar(env)).registros.map(r => [r.id, r.titulo]));
-  const { datos } = await ml(env, '/my/received_questions/search?status=UNANSWERED&limit=50&api_version=4');
+  const { preguntas: lista } = await preguntasSinResponder(env);
   return {
-    preguntas: (datos?.questions || []).map(q => {
+    preguntas: lista.map(q => {
       const registroId = porMl.get(q.item_id) || null;
       return { id: String(q.id), mlId: q.item_id, registroId, titulo: titulos.get(registroId) || q.item_id, texto: q.text, fecha: q.date_created };
     })
@@ -377,7 +403,12 @@ async function borradorRespuesta(env, id, cuerpo) {
 
 async function responderPregunta(env, id, cuerpo) {
   const text = validarRespuesta(cuerpo.texto);
-  await ml(env, '/answers', { metodo: 'POST', cuerpo: { question_id: Number(id), text } });
+  try {
+    await ml(env, '/answers', { metodo: 'POST', cuerpo: { question_id: Number(id), text } });
+  } catch (e) {
+    if (bloqueoPorPermisos(e)) throw Object.assign(new Error(mensajePermisoPreguntas('responder')), { status: 403, ml: e.ml });
+    throw e;
+  }
   await env.KV.delete('seguimiento'); // que el historial deje de contarla
   return { ok: true };
 }

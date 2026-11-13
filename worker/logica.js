@@ -245,6 +245,11 @@ export function armarItem(p, { userProducts }) {
     pictures: (p.fotos || []).map(id => ({ id })),
     attributes: atributos
   };
+  // Ropa y calzado: la guía de talles (SIZE_GRID_ID) y la fila de este talle, a nivel del ítem (sin variaciones).
+  if (p.guiaTalles?.id && p.guiaTalles?.fila) {
+    atributos.push({ id: 'SIZE_GRID_ID', value_name: String(p.guiaTalles.id) });
+    atributos.push({ id: 'SIZE_GRID_ROW_ID', value_name: String(p.guiaTalles.fila) });
+  }
   if (userProducts) item.family_name = titulo;
   else item.title = titulo;
 
@@ -607,7 +612,85 @@ export function erroresML(respuesta) {
     .map(c => `${c.type === 'warning' ? '(aviso) ' : ''}${c.message}${c.code ? ` [${c.code}]` : ''}`);
 }
 
-const AVISO_GRILLA = 'Esta categoría (ropa o calzado) exige una guía de talles de MercadoLibre y VendeloYa todavía no la arma. Publicala directo desde MercadoLibre o elegí otra categoría.';
+const AVISO_GRILLA = 'MercadoLibre no aceptó la guía de talles de esta categoría (ropa o calzado). Publicala directo desde MercadoLibre o elegí otra categoría.';
+
+/* ---------- Guías de talles (ropa y calzado) ----------
+   ML exige SIZE_GRID_ID (la guía) y SIZE_GRID_ROW_ID (la fila del talle, "<guía>:<n>"). Las guías STANDARD
+   y de MARCA ya existen en MercadoLibre: se buscan (POST /catalog/charts/search, solo lectura) y se elige
+   la fila. VendeloYa no crea ninguna guía en la cuenta. Un ítem = un talle (sin variaciones). */
+
+/** Qué pide la categoría para la guía de talles, según los tags de sus atributos. */
+export function requisitosDeGuia(atributosML) {
+  const lista = atributosML || [];
+  return {
+    pide: lista.some(a => a.id === 'SIZE_GRID_ID' && a.value_type === 'grid_id'),
+    plantilla: lista.filter(a => (a.tags || {}).grid_template_required).map(a => a.id)
+  };
+}
+
+const valorDe = (atributos, id) => String((atributos || []).find(a => a.id === id)?.valor ?? '').trim();
+
+/**
+ * Cuerpo de POST /catalog/charts/search. El dominio va sin prefijo de sitio ("SNEAKERS", no "MLA-SNEAKERS").
+ * Lleva los atributos de la plantilla (ej. GENDER) y, si está cargada, la marca.
+ * Devuelve también los que faltan de la plantilla.
+ */
+export function armarBusquedaGuia({ dominio, sitio = 'MLA', vendedor, requisitos, atributos, sinMarca = false }) {
+  const ids = [...new Set([...(requisitos?.plantilla || []), ...(sinMarca ? [] : ['BRAND'])])];
+  const attributes = [];
+  const faltan = [];
+  for (const id of ids) {
+    const v = valorDe(atributos, id);
+    if (v) attributes.push({ id, values: [{ name: v }] });
+    else if ((requisitos?.plantilla || []).includes(id)) faltan.push(id);
+  }
+  return { cuerpo: { domain_id: String(dominio || '').replace(/^[A-Z]{3}-/, ''), site_id: sitio, seller_id: Number(vendedor), attributes }, faltan };
+}
+
+/** De las guías que devolvió la búsqueda, la que sirve: de la marca si hay, si no la estándar, si no una propia. */
+export function elegirGuia(charts, marca) {
+  const lista = (charts || []).filter(c => c && c.id);
+  const m = sinAcentos(marca);
+  const nombre = c => sinAcentos(Object.values(c.names || {}).join(' '));
+  return (m && lista.find(c => c.type === 'BRAND' && nombre(c).includes(m)))
+    || lista.find(c => c.type === 'STANDARD')
+    || lista.find(c => c.type === 'SPECIFIC')
+    || null;
+}
+
+const normTalle = s => sinAcentos(s).replace(',', '.').replace(/\s+/g, ' ');
+const numeroDe = s => { const m = /\d+(?:\.\d+)?/.exec(normTalle(s)); return m ? Number(m[0]) : null; };
+const valoresDeFila = f => (f.attributes || []).flatMap(a => (a.values || []).map(v => ({ attr: a.id, nombre: String(v.name ?? '') })));
+
+/** Los talles que ofrece una guía (el talle principal de cada fila). */
+export function tallesDeGuia(guia) {
+  return (guia?.rows || []).map(f => valoresDeFila(f).find(v => v.attr === 'SIZE')?.nombre || valoresDeFila(f)[0]?.nombre).filter(Boolean);
+}
+
+/**
+ * La fila de la guía que corresponde al talle escrito: primero por nombre (en cualquier columna, "40 AR" = "40 AR"),
+ * después por el número en el talle principal, después por el número en cualquier columna.
+ * Devuelve { fila: "<guía>:<n>", talle: el nombre del talle principal de la fila } o null.
+ */
+export function filaDeGuia(guia, talle) {
+  const filas = guia?.rows || [];
+  const t = normTalle(talle);
+  if (!t) return null;
+  const principal = f => valoresDeFila(f).find(v => v.attr === 'SIZE')?.nombre || valoresDeFila(f)[0]?.nombre || '';
+  const n = numeroDe(talle);
+  const hallada = filas.find(f => valoresDeFila(f).some(v => normTalle(v.nombre) === t))
+    || (n !== null && filas.find(f => numeroDe(principal(f)) === n))
+    || (n !== null && filas.find(f => valoresDeFila(f).some(v => numeroDe(v.nombre) === n)))
+    || null;
+  return hallada && hallada.id ? { fila: String(hallada.id), talle: principal(hallada) } : null;
+}
+
+/** La publicación con la guía aplicada: el talle pasa a ser el de la fila y se guardan los ids para armarItem. */
+export function aplicarGuia(p, guia, hallada) {
+  const atributos = (p.atributos || []).filter(a => a.id !== 'SIZE');
+  atributos.push({ id: 'SIZE', nombre: 'Talle', tipo: 'string', requerido: true, opciones: [], valor: hallada.talle });
+  return { ...p, atributos, guiaTalles: { id: String(guia.id), fila: hallada.fila } };
+}
 
 /* Avisos que MercadoLibre manda en inglés y que se entienden mejor dichos en criollo. */
 const AVISOS_CONOCIDOS = {

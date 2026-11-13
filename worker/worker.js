@@ -11,6 +11,7 @@
      GET  /api/estado            ¿hay cuenta conectada? ¿cuál?
      POST /api/analizar          fotos → propuesta de publicación
      POST /api/categoria         otra categoría → sus atributos
+     POST /api/guia-talles       ropa/calzado: guías de talles y talles disponibles (solo lectura)
      POST /api/revisar           sube fotos y valida SIN publicar
      POST /api/publicar          publica de verdad + descripción
      POST /api/desconectar       borra el token de MercadoLibre (cerrar sesión)
@@ -29,7 +30,7 @@
 
 import { identificar, completarAtributos, responderPregunta as borradorConIA } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES, requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -191,8 +192,8 @@ async function token(env) {
 
 /* ---------- MercadoLibre ---------- */
 
-async function ml(env, ruta, { metodo = 'GET', cuerpo, conToken = true, tolerar = [] } = {}) {
-  const headers = { accept: 'application/json' };
+async function ml(env, ruta, { metodo = 'GET', cuerpo, conToken = true, tolerar = [], cabeceras = {} } = {}) {
+  const headers = { accept: 'application/json', ...cabeceras };
   if (conToken) {
     const t = await token(env);
     if (!t) throw Object.assign(new Error('La cuenta de MercadoLibre no está conectada.'), { status: 409 });
@@ -536,27 +537,111 @@ async function subirFotos(env, fotos) {
   return ids;
 }
 
+/* ---------- Guía de talles (ropa y calzado): solo lectura en MercadoLibre ---------- */
+
+const cacheModa = new Map();   // categoría → qué pide la guía y su dominio (dura lo que dure el Worker en memoria)
+
+async function requisitosDeModa(env, categoriaId) {
+  if (cacheModa.has(categoriaId)) return cacheModa.get(categoriaId);
+  // Si MercadoLibre no responde los atributos, no se bloquea nada acá (y no se recuerda): el validador igual avisa si faltaba la guía.
+  const { status, datos } = await ml(env, `/categories/${categoriaId}/attributes`, { conToken: false, tolerar: [400, 404, 429, 500, 502, 503] });
+  if (status !== 200 || !Array.isArray(datos)) return { pide: false };
+  const r = requisitosDeGuia(datos);
+  if (r.pide) {
+    // El dominio ("MLA-SNEAKERS") no viene en la categoría: sale de la búsqueda de dominios por su nombre.
+    const { datos: cat } = await ml(env, `/categories/${categoriaId}`, { conToken: false });
+    const { datos: pred } = await ml(env, `/sites/${SITIO}/domain_discovery/search?limit=8&q=${encodeURIComponent(cat.name)}`, { conToken: false, tolerar: [400, 404] });
+    r.dominio = (Array.isArray(pred) ? pred : []).find(x => x.category_id === categoriaId)?.domain_id || null;
+  }
+  cacheModa.set(categoriaId, r);
+  return r;
+}
+
+/**
+ * Busca la guía de talles que corresponde a la publicación: POST /catalog/charts/search y GET /catalog/charts/{id},
+ * las dos de solo lectura. Nunca crea una guía en la cuenta: si no hay ninguna, lo dice.
+ * Devuelve { pide:false } si la categoría no usa guía, o { pide:true, guia, charts, talles, error }.
+ */
+async function buscarGuia(env, p, yo) {
+  if (!/^[A-Z]{3}\d+$/.test(p.categoria || '')) return { pide: false };
+  const req = await requisitosDeModa(env, p.categoria);
+  if (!req.pide) return { pide: false };
+  if (!req.dominio) return { pide: true, error: 'No pude saber el dominio de ropa o calzado de esta categoría para buscar su guía de talles.' };
+
+  const cabeceras = { 'x-caller-id': String(yo.id) };
+  const buscar = async sinMarca => {
+    const { cuerpo, faltan } = armarBusquedaGuia({ dominio: req.dominio, sitio: SITIO, vendedor: yo.id, requisitos: req, atributos: p.atributos, sinMarca });
+    if (faltan.length) return { faltan };
+    const { status, datos } = await ml(env, '/catalog/charts/search', { metodo: 'POST', cuerpo, cabeceras, tolerar: [400, 404, 422] });
+    return { status, datos };
+  };
+  let r = await buscar(false);
+  if (r.faltan) return { pide: true, error: `Para elegir la guía de talles falta completar: ${r.faltan.join(', ')}.` };
+  if (r.status === 200 && !(r.datos?.charts || []).length) r = await buscar(true);   // sin la marca, por si no hay guía de esa marca
+  if (r.status !== 200) return { pide: true, error: `MercadoLibre no pudo buscar la guía de talles: ${r.datos?.message || r.status}.` };
+
+  const charts = (r.datos.charts || []).filter(c => c && c.id);
+  const marca = String((p.atributos || []).find(a => a.id === 'BRAND')?.valor ?? '');
+  const elegida = elegirGuia(charts, marca);
+  if (!elegida) return { pide: true, charts, error: 'MercadoLibre no tiene una guía de talles estándar para este producto. Hay que crear una en la cuenta (eso lo decide Nico) o publicarlo directo desde MercadoLibre.' };
+  // La búsqueda trae la guía sin filas: las filas salen de la guía puntual.
+  const { datos: guia } = await ml(env, `/catalog/charts/${encodeURIComponent(elegida.id)}`);
+  return { pide: true, charts, guia, talles: tallesDeGuia(guia) };
+}
+
+/** La publicación con su guía de talles puesta (si la categoría la pide). { p } o { error } con el motivo en criollo. */
+async function conGuiaDeTalles(env, p, yo) {
+  const b = await buscarGuia(env, p, yo);
+  if (!b.pide) return { p };
+  if (b.error) return { error: b.error };
+  const talle = String((p.atributos || []).find(a => a.id === 'SIZE')?.valor ?? '').trim();
+  const hallada = filaDeGuia(b.guia, talle);
+  if (!hallada) {
+    const nombre = Object.values(b.guia.names || {})[0] || `guía ${b.guia.id}`;
+    return { error: `El talle «${talle || 'sin talle'}» no está en la guía de talles «${nombre}». Talles de esa guía: ${b.talles.slice(0, 20).join(', ')}.` };
+  }
+  return { p: aplicarGuia(p, b.guia, hallada), guia: { id: String(b.guia.id), nombre: Object.values(b.guia.names || {})[0] || null, tipo: b.guia.type || null, fila: hallada.fila } };
+}
+
+/** Solo lectura: qué guías de talles hay para esta categoría y qué talles tiene la elegida. No valida ni publica. */
+async function guiaTalles(env, cuerpo) {
+  const yo = await usuario(env);
+  const p = { categoria: cuerpo.categoria, atributos: cuerpo.atributos || [] };
+  const b = await buscarGuia(env, p, yo);
+  if (!b.pide) return { pide: false };
+  return {
+    pide: true, error: b.error || null,
+    guias: (b.charts || []).map(c => ({ id: String(c.id), tipo: c.type || null, nombre: Object.values(c.names || {})[0] || null, principal: c.main_attribute_id || null })),
+    elegida: b.guia ? { id: String(b.guia.id), tipo: b.guia.type || null, nombre: Object.values(b.guia.names || {})[0] || null, filas: (b.guia.rows || []).length } : null,
+    talles: b.talles || [],
+    formaFila: b.guia?.rows?.[0] ? { id: b.guia.rows[0].id, columnas: (b.guia.rows[0].attributes || []).map(a => a.id) } : null
+  };
+}
+
 /** Revisa la publicación con el validador de MercadoLibre. No publica nada. */
 async function revisar(env, cuerpo) {
   const p = cuerpo.publicacion || {};
   const fotos = await subirFotos(env, cuerpo.fotos || []);
-  const conFotos = { ...p, fotos };
+  let conFotos = { ...p, fotos };
   const falta = faltantes(conFotos);
   if (falta.length) return { ok: false, fotos, errores: [`Falta completar: ${falta.join(', ')}.`] };
 
   const yo = await usuario(env);
+  const g = await conGuiaDeTalles(env, conFotos, yo);
+  if (g.error) return { ok: false, fotos, errores: [g.error] };
+  conFotos = g.p;
   const item = armarItem(conFotos, { userProducts: yo.userProducts });
   const { status, datos } = await ml(env, '/items/validate', { metodo: 'POST', cuerpo: item, tolerar: [400] });
   const sello = paraHuella(item, p.descripcion);
   if (status !== 400) {
     await marcarValidado(env.KV, sello);   // /api/publicar solo acepta lo que pasó por acá, con este mismo contenido (descripción incluida)
-    return { ok: true, fotos, item, avisos: [] };
+    return { ok: true, fotos, item, avisos: [], guia: g.guia };
   }
   // Queda en el log del Worker (wrangler tail) por si hay que ver la respuesta cruda.
   console.log('validate 400', JSON.stringify(datos));
   const { errores, avisos } = separarCausas(datos, { envio: p.envio });
   if (!errores.length) await marcarValidado(env.KV, sello);   // solo avisos: se puede publicar
-  return { ok: !errores.length, fotos, item, errores, avisos };
+  return { ok: !errores.length, fotos, item, errores, avisos, guia: g.guia };
 }
 
 const SIN_REVISAR = 'Esta publicación no pasó la revisión de MercadoLibre con este contenido (o cambió después). Tocá Publicar de nuevo para que la revise.';
@@ -567,11 +652,15 @@ async function publicar(env, cuerpo) {
   // Una foto sin id nunca pasó por la revisión (la revisión es la que las sube): no se sube nada acá.
   if ((cuerpo.fotos || []).some(f => !f.id)) throw Object.assign(new Error(SIN_REVISAR), { status: 412 });
   const fotos = await subirFotos(env, cuerpo.fotos || []);
-  const conFotos = { ...p, fotos };
+  let conFotos = { ...p, fotos };
   const falta = faltantes(conFotos);
   if (falta.length) throw Object.assign(new Error(`Falta completar: ${falta.join(', ')}.`), { status: 400 });
 
   const yo = await usuario(env);
+  // La guía de talles se vuelve a buscar igual que en la revisión: si cambió, el sello no coincide y pide revisar de nuevo.
+  const g = await conGuiaDeTalles(env, conFotos, yo);
+  if (g.error) throw Object.assign(new Error(g.error), { status: 422 });
+  conFotos = g.p;
   const cuerpoItem = armarItem(conFotos, { userProducts: yo.userProducts });
   // Solo se publica el contenido exacto que aprobó el validador (POST /items/validate, vía /api/revisar).
   const sello = paraHuella(cuerpoItem, p.descripcion);
@@ -648,7 +737,7 @@ export default {
       const pub = /^\/api\/publicaciones\/([A-Z]{3}\d{6,})$/.exec(url.pathname);
       if (pub) return json(await cambiarPublicacion(env, pub[1], cuerpo), 200, origen);
 
-      const rutas = { '/api/analizar': analizar, '/api/categoria': cambiarCategoria, '/api/revisar': revisar, '/api/publicar': publicar };
+      const rutas = { '/api/analizar': analizar, '/api/categoria': cambiarCategoria, '/api/revisar': revisar, '/api/publicar': publicar, '/api/guia-talles': guiaTalles };
       const ruta = rutas[url.pathname];
       if (!ruta) return json({ error: 'No existe.' }, 404, origen);
       return json(await ruta(env, cuerpo), 200, origen);

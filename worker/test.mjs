@@ -10,7 +10,8 @@ import {
   estadoPublicacion, armarSeguimiento, cambioPublicacion, validarRespuesta, elegirParecidos,
   leerComisiones, calcularGanancia, precioDeEquilibrio,
   leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete,
-  huellaItem, paraHuella, marcarValidado, estaValidado, gastarValidacion, leerVisitas
+  huellaItem, paraHuella, marcarValidado, estaValidado, gastarValidacion, leerVisitas,
+  requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -1050,6 +1051,174 @@ test('respaldo: rechaza archivos que no son de VendeloYa, sin registros o demasi
   const muchos = { app: 'VendeloYa', registros: Array.from({ length: 201 }, (_, i) => ({ id: `registro-${String(i).padStart(4, '0')}`, estado: 'borrador' })) };
   assert.match(planImportacion(muchos, []).error, /máximo es 200/);
   assert.equal(planImportacion({ app: 'VendeloYa', registros: [] }, []).importar.length, 0);
+});
+
+/* ---- Guías de talles (ropa y calzado) ---- */
+const guiaFalsa = (id = '426238', type = 'STANDARD') => ({
+  id, type, names: { MLA: 'Guía de talles Standard de calzado de hombre' }, main_attribute_id: 'AR_SIZE',
+  rows: ['40', '41', '42'].map((n, i) => ({ id: `${id}:${i + 1}`, attributes: [
+    { id: 'SIZE', values: [{ name: `${n} AR` }] }, { id: 'AR_SIZE', values: [{ name: `${n} AR` }] },
+    { id: 'M_US_SIZE', values: [{ name: `${8.5 + i / 2} US`.replace('.', ',') }] }] }))
+});
+
+test('guía de talles: la categoría de zapatillas pide guía y GENDER es lo que define la búsqueda', () => {
+  const zap = contrato.casos.find(x => x.categoria.id === 'MLA109027');
+  const r = requisitosDeGuia(zap.atributos);
+  assert.equal(r.pide, true);
+  assert.deepEqual(r.plantilla, ['GENDER']);
+  for (const c of contrato.casos.filter(x => x.categoria.id !== 'MLA109027')) assert.equal(requisitosDeGuia(c.atributos).pide, false, c.busqueda);
+});
+
+test('guía de talles: el cuerpo de la búsqueda lleva dominio sin prefijo, vendedor, género y marca; avisa si falta el género', () => {
+  const req = { pide: true, plantilla: ['GENDER'] };
+  const atributos = [{ id: 'GENDER', valor: 'Hombre' }, { id: 'BRAND', valor: 'Adidas' }, { id: 'COLOR', valor: 'Negro' }];
+  const { cuerpo, faltan } = armarBusquedaGuia({ dominio: 'MLA-SNEAKERS', sitio: 'MLA', vendedor: 123, requisitos: req, atributos });
+  assert.equal(cuerpo.domain_id, 'SNEAKERS');
+  assert.equal(cuerpo.site_id, 'MLA');
+  assert.equal(cuerpo.seller_id, 123);
+  assert.deepEqual(cuerpo.attributes, [{ id: 'GENDER', values: [{ name: 'Hombre' }] }, { id: 'BRAND', values: [{ name: 'Adidas' }] }]);
+  assert.deepEqual(faltan, []);
+  assert.deepEqual(armarBusquedaGuia({ dominio: 'MLA-SNEAKERS', vendedor: 1, requisitos: req, atributos, sinMarca: true }).cuerpo.attributes.map(a => a.id), ['GENDER']);
+  assert.deepEqual(armarBusquedaGuia({ dominio: 'SNEAKERS', vendedor: 1, requisitos: req, atributos: [{ id: 'BRAND', valor: 'X' }] }).faltan, ['GENDER']);
+});
+
+test('guía de talles: elige la de la marca, si no la estándar, si no una propia; nunca una de otra marca', () => {
+  const ch = (id, type, nombre) => ({ id, type, names: { MLA: nombre } });
+  const lista = [ch('1', 'BRAND', 'Guía de calzado de mujer de adidas'), ch('2', 'SPECIFIC', 'Mi guía'), ch('3', 'STANDARD', 'Standard')];
+  assert.equal(elegirGuia(lista, 'adidas').id, '1');
+  assert.equal(elegirGuia(lista, 'Nike').id, '3');   // la de adidas no sirve para Nike
+  assert.equal(elegirGuia(lista, '').id, '3');
+  assert.equal(elegirGuia([lista[1]], 'Nike').id, '2');
+  assert.equal(elegirGuia([], 'Nike'), null);
+  assert.equal(elegirGuia([{ type: 'STANDARD' }], ''), null);
+});
+
+test('guía de talles: la fila sale del talle (por nombre, por número, en cualquier columna) o no hay fila', () => {
+  const g = guiaFalsa();
+  assert.deepEqual(filaDeGuia(g, '41 AR'), { fila: '426238:2', talle: '41 AR' });
+  assert.deepEqual(filaDeGuia(g, '41'), { fila: '426238:2', talle: '41 AR' });
+  assert.deepEqual(filaDeGuia(g, '9,5 US'), { fila: '426238:3', talle: '42 AR' });
+  assert.deepEqual(filaDeGuia(g, '9'), { fila: '426238:2', talle: '41 AR' });   // "9 US" en otra columna
+  // el número del talle principal gana sobre el mismo número en otra columna (largo del pie, etc.)
+  const guia2 = { rows: [
+    { id: '7:1', attributes: [{ id: 'SIZE', values: [{ name: 'M' }] }, { id: 'FOOT_LENGTH', values: [{ name: '41 cm' }] }] },
+    { id: '7:2', attributes: [{ id: 'SIZE', values: [{ name: '41 AR' }] }] }] };
+  assert.deepEqual(filaDeGuia(guia2, '41'), { fila: '7:2', talle: '41 AR' });
+  assert.equal(filaDeGuia(g, '50'), null);
+  assert.equal(filaDeGuia(g, ''), null);
+  assert.equal(filaDeGuia({ rows: [] }, '40'), null);
+  assert.deepEqual(tallesDeGuia(g), ['40 AR', '41 AR', '42 AR']);
+});
+
+test('guía de talles: aplicarGuia deja el talle de la fila y armarItem manda SIZE_GRID_ID y SIZE_GRID_ROW_ID; sin guía no manda nada', () => {
+  const base = { titulo: 'Zapatillas', categoria: 'MLA109027', precio: 30000, condicion: 'usado', cantidad: 1, fotos: ['f'], envio: 'retiro',
+    atributos: [{ id: 'SIZE', valor: '41', opciones: [{ id: '1', nombre: '41' }] }, { id: 'GENDER', valor: 'Hombre', opciones: [] }] };
+  const p = aplicarGuia(base, guiaFalsa(), { fila: '426238:2', talle: '41 AR' });
+  assert.equal(p.atributos.filter(a => a.id === 'SIZE').length, 1);
+  assert.equal(p.atributos.find(a => a.id === 'SIZE').valor, '41 AR');
+  const item = armarItem(p, { userProducts: true });
+  assert.deepEqual(item.attributes.find(a => a.id === 'SIZE_GRID_ID'), { id: 'SIZE_GRID_ID', value_name: '426238' });
+  assert.deepEqual(item.attributes.find(a => a.id === 'SIZE_GRID_ROW_ID'), { id: 'SIZE_GRID_ROW_ID', value_name: '426238:2' });
+  assert.equal(item.attributes.find(a => a.id === 'SIZE').value_name, '41 AR');
+  assert.ok(!armarItem(base, { userProducts: true }).attributes.some(a => /GRID/.test(a.id)));
+  assert.equal(base.atributos[0].valor, '41', 'no muta la publicación original');
+});
+
+await testA('Worker: ropa y calzado buscan la guía (solo lectura), la asocian al ítem y nunca crean una', async () => {
+  const { default: worker } = await import('./worker.js');
+  const zap = contrato.casos.find(x => x.categoria.id === 'MLA109027');
+  const llamadas = [];
+  const busquedas = [];
+  let charts = [{ id: '426238', type: 'STANDARD', names: { MLA: 'Standard' } }];
+  let vaciaConMarca = false;   // simula que con la marca en el filtro no hay guía, y sin ella sí
+  let validador = () => ({ status: 200, cuerpo: {} });
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    llamadas.push(`${init.method || 'GET'} ${ruta}`);
+    const r = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (ruta === '/users/me') return r(200, { id: 77, nickname: 'prueba', tags: ['user_product_seller'] });
+    if (ruta === '/categories/MLA109027/attributes') return r(200, zap.atributos);
+    if (ruta === '/categories/MLA109027') return r(200, zap.categoria);
+    if (ruta === '/categories/MLA5232/attributes') return r(200, contrato.casos.find(x => x.categoria.id === 'MLA5232').atributos);
+    if (ruta.startsWith('/sites/MLA/domain_discovery/search')) return r(200, zap.discovery);
+    if (ruta === '/catalog/charts/search') { const cuerpoBusqueda = JSON.parse(init.body);
+      busquedas.push({ cuerpo: cuerpoBusqueda, caller: init.headers['x-caller-id'] });
+      return r(200, { charts: vaciaConMarca && cuerpoBusqueda.attributes.some(a => a.id === 'BRAND') ? [] : charts }); }
+    if (ruta === '/catalog/charts/426238') return r(200, guiaFalsa());
+    if (ruta === '/items/validate') { const v = validador(JSON.parse(init.body)); return r(v.status, v.cuerpo); }
+    if (ruta === '/items') return r(201, { id: 'MLA999000002', permalink: 'p', status: 'active' });
+    if (ruta.endsWith('/description')) return r(201, {});
+    return r(404, { message: `ruta no simulada: ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 77, vence: Date.now() + 3600e3 }));
+    const env = { KV: kv, APP_SECRET: 'secreto' };
+    const llamar = async (ruta, cuerpo) => {
+      const res = await worker.fetch(new Request(`https://w.test${ruta}`, { method: 'POST', body: JSON.stringify(cuerpo),
+        headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto', 'content-type': 'application/json' } }), env);
+      return { status: res.status, ...(await res.json()) };
+    };
+    const pub = (talle, extra = {}) => ({ titulo: 'Zapatillas running', categoria: 'MLA109027', precio: 30000, condicion: 'usado', cantidad: 1, tipoPublicacion: 'gold_special',
+      envio: 'retiro', descripcion: 'Casi nuevas',
+      atributos: [{ id: 'SIZE', valor: talle, opciones: [] }, { id: 'GENDER', valor: 'Hombre', opciones: [] }, { id: 'BRAND', valor: 'Adidas', opciones: [] }], ...extra });
+    const cuerpo = (talle, extra) => ({ publicacion: pub(talle, extra), fotos: [{ id: 'p1' }] });
+
+    // el explorador de solo lectura
+    const g = await llamar('/api/guia-talles', { categoria: 'MLA109027', atributos: pub('41').atributos });
+    assert.equal(g.pide, true);
+    assert.equal(g.elegida.id, '426238');
+    assert.deepEqual(g.talles, ['40 AR', '41 AR', '42 AR']);
+    assert.equal(busquedas[0].cuerpo.domain_id, 'SNEAKERS');
+    assert.equal(busquedas[0].cuerpo.seller_id, 77);
+    assert.equal(busquedas[0].caller, '77');
+
+    // revisar: la guía queda en el ítem que se valida
+    let visto = null;
+    validador = item => { visto = item; return { status: 200, cuerpo: {} }; };
+    let r = await llamar('/api/revisar', cuerpo('41'));
+    assert.equal(r.ok, true);
+    assert.equal(r.guia.fila, '426238:2');
+    assert.ok(visto.attributes.some(a => a.id === 'SIZE_GRID_ID' && a.value_name === '426238'));
+    assert.ok(visto.attributes.some(a => a.id === 'SIZE_GRID_ROW_ID' && a.value_name === '426238:2'));
+    // publicar con el mismo contenido: sale, con la misma guía
+    r = await llamar('/api/publicar', cuerpo('41'));
+    assert.equal(r.status, 200);
+
+    // un talle que no está en la guía: error claro y no se valida ni se publica
+    const antes = llamadas.filter(l => l === 'POST /items/validate').length;
+    r = await llamar('/api/revisar', cuerpo('50'));
+    assert.equal(r.ok, false);
+    assert.match(r.errores[0], /no está en la guía de talles.*40 AR, 41 AR, 42 AR/);
+    assert.equal(llamadas.filter(l => l === 'POST /items/validate').length, antes);
+
+    // sin guía de la marca: reintenta sin la marca y usa la estándar
+    vaciaConMarca = true;
+    const intentos = busquedas.length;
+    r = await llamar('/api/revisar', cuerpo('42'));
+    assert.equal(r.ok, true);
+    assert.equal(r.guia.id, '426238');
+    assert.equal(busquedas.length - intentos, 2);
+    assert.ok(!busquedas.at(-1).cuerpo.attributes.some(a => a.id === 'BRAND'));
+    vaciaConMarca = false;
+
+    // sin guía en MercadoLibre: se dice, y NO se crea nada
+    charts = [];
+    r = await llamar('/api/revisar', cuerpo('41'));
+    assert.equal(r.ok, false);
+    assert.match(r.errores[0], /no tiene una guía de talles estándar/);
+    assert.match(r.errores[0], /Nico/);
+
+    // jamás se escribe en /catalog/charts (crear, modificar o borrar guías)
+    assert.ok(!llamadas.some(l => /^(POST|PUT|DELETE|PATCH) \/catalog\/charts(?!\/search)/.test(l)), llamadas.filter(l => l.includes('charts')).join(' | '));
+    // una categoría sin guía (taladro) no busca nada
+    const buscadas = llamadas.filter(l => l === 'POST /catalog/charts/search').length;
+    assert.equal((await llamar('/api/guia-talles', { categoria: 'MLA5232' })).pide, false);
+    assert.equal(llamadas.filter(l => l === 'POST /catalog/charts/search').length, buscadas);
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
 });
 
 console.log(`\n${n} tests en verde`);

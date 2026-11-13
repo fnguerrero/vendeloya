@@ -5,7 +5,8 @@
 // Única escritura en la cuenta: UNA foto de prueba (un PNG generado acá) que /api/revisar sube a
 // MercadoLibre una vez (POST /pictures/items/upload) y se reutiliza en los 8 borradores. Sin foto
 // no hay validación posible. No toca publicaciones existentes, no responde preguntas, no cambia
-// precios, y no llama a /api/publicar.
+// precios, y no llama a /api/publicar. Para ropa y calzado también consulta (solo lectura) las guías de
+// talles que MercadoLibre ya tiene (POST /catalog/charts/search); no crea ninguna guía en la cuenta.
 //
 //   $env:VENDELOYA_CLAVE = Read-Host "Clave de la app"
 //   node "W:\Working Folder Personal\Apps\VendeloYa\tools\validar-lote.mjs"
@@ -58,6 +59,8 @@ function valorDePrueba(a) {
 const casos = contrato.casos.map((c, i) => {
   const cat = c.categoria;
   const atributos = elegirAtributos(c.atributos, 'usado').map(a => ({ ...a, requerido: a.requerido && a.id !== 'GTIN', valor: valorDePrueba(a) }));
+  // El rubro es de hombre ("zapatillas running hombre"): la guía de talles se busca por género.
+  for (const a of atributos) if (a.id === 'GENDER' && a.opciones.some(o => o.nombre === 'Hombre')) a.valor = 'Hombre';
   const conEnvio = i % 2 === 1;
   return {
     rubro: c.busqueda, categoria: cat.id, envio: conEnvio ? 'me2' : 'retiro',
@@ -84,6 +87,21 @@ if (seco) {
 let fotos = [{ dataUrl: `data:image/png;base64,${pngDePrueba().toString('base64')}` }];
 const resultados = [];
 for (const c of casos) {
+  // Ropa y calzado: se piden las guías de talles que MercadoLibre ya tiene (solo lectura, no se crea ninguna)
+  // y se pone en el borrador un talle que exista en la guía elegida.
+  if (contrato.casos.find(x => x.categoria.id === c.categoria).atributos.some(a => a.id === 'SIZE_GRID_ID')) {
+    const g = await pedir('/api/guia-talles', { metodo: 'POST', cuerpo: { categoria: c.categoria, atributos: c.publicacion.atributos } });
+    const d = g.datos || {};
+    console.log(`\n[guía de talles] ${c.categoria} -> HTTP ${g.status} | guías: ${(d.guias || []).map(x => `${x.tipo} ${x.id}`).join(', ') || 'ninguna'} | elegida: ${d.elegida ? `${d.elegida.tipo} ${d.elegida.id} (${d.elegida.filas} filas)` : 'ninguna'}`);
+    if (d.error) console.log('   error:', String(d.error).slice(0, 220));
+    if (d.formaFila) console.log('   forma de una fila:', JSON.stringify(d.formaFila));
+    const talle = (d.talles || [])[Math.floor((d.talles || []).length / 2)];
+    if (talle) {
+      const s = c.publicacion.atributos.find(a => a.id === 'SIZE');
+      if (s) s.valor = talle;
+      console.log(`   talle de prueba: ${talle} (de ${(d.talles || []).length})`);
+    }
+  }
   const r = await pedir('/api/revisar', { metodo: 'POST', cuerpo: { publicacion: c.publicacion, fotos } });
   if (r.status === 200 && r.datos.fotos?.length) fotos = r.datos.fotos.map(id => ({ id }));   // reutiliza la foto ya subida
   resultados.push({ ...c, status: r.status, datos: r.datos });

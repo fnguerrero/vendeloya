@@ -79,10 +79,10 @@ body {
   background: var(--amarillo); color: #333;
   box-shadow: 0 1px 0 rgba(0, 0, 0, .1);
 }
-.marca { display: flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; }
+.marca { display: flex; align-items: center; gap: 3px; color: inherit; text-decoration: none; }
 .marca img { display: block; border-radius: 9px; }
-.nombre-marca { font-size: 1.3rem; font-weight: 400; letter-spacing: -.02em; }
-.nombre-marca b { font-weight: 800; font-style: italic; }
+.nombre-marca { font-size: 1.9rem; font-weight: 400; letter-spacing: -.035em; text-transform: uppercase; line-height: 1; }
+.nombre-marca b { font-weight: 800; font-style: italic; margin-left: -.02em; }
 
 .chip {
   max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -487,8 +487,8 @@ dialog.config .titulo-seccion h2 { margin: 0; }
 
 /* 8. Header compacto */
 .barra { padding: calc(8px + env(safe-area-inset-top)) 16px 8px; }
-.marca img { width: 30px; height: 30px; }
-.nombre-marca { font-size: 1.15rem; }
+.marca img { width: 46px; height: 46px; }
+.nombre-marca { font-size: 1.5rem; }
 .chip { padding: 5px 12px; font-size: .8rem; }
 .icono { width: 36px; height: 36px; }
 

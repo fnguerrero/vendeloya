@@ -30,7 +30,7 @@
 
 import { identificar, completarAtributos, responderPregunta as borradorConIA } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES, requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES, requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia, validarDescripcion, limpiarTalles, conTalle } from './logica.js';
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -423,12 +423,23 @@ async function responderPregunta(env, id, cuerpo) {
   return { ok: true };
 }
 
-/** Precio, pausar, reactivar o marcar vendida (cerrar) una publicación. */
+/**
+ * Precio, stock, descripción, pausar, reactivar o marcar vendida (cerrar) una publicación.
+ * El título no se edita: con User Products el nombre es el family_name y MercadoLibre no lo deja cambiar.
+ */
 async function cambiarPublicacion(env, mlId, cuerpo) {
-  const cambio = cambioPublicacion(cuerpo.accion, cuerpo.precio);
+  if (cuerpo.accion === 'descripcion') {
+    const texto = validarDescripcion(cuerpo.descripcion);
+    // Si la publicación ya tiene descripción se reemplaza (PUT); si nunca tuvo, MercadoLibre contesta 404 y se crea (POST).
+    const r = await ml(env, `/items/${mlId}/description?api_version=2`, { metodo: 'PUT', cuerpo: { plain_text: texto }, tolerar: [404] });
+    if (r.status === 404) await ml(env, `/items/${mlId}/description`, { metodo: 'POST', cuerpo: { plain_text: texto } });
+    return { descripcion: texto };
+  }
+  const cambio = cambioPublicacion(cuerpo.accion, cuerpo.accion === 'stock' ? cuerpo.stock : cuerpo.precio);
   const { datos } = await ml(env, `/items/${mlId}`, { metodo: 'PUT', cuerpo: cambio });
   await env.KV.delete('seguimiento');
-  return { estado: estadoPublicacion(datos), precio: Number.isFinite(datos?.price) ? datos.price : null };
+  return { estado: estadoPublicacion(datos), precio: Number.isFinite(datos?.price) ? datos.price : null,
+    cantidad: Number.isFinite(datos?.available_quantity) ? datos.available_quantity : null };
 }
 
 /**
@@ -590,8 +601,8 @@ async function buscarGuia(env, p, yo) {
 }
 
 /** La publicación con su guía de talles puesta (si la categoría la pide). { p } o { error } con el motivo en criollo. */
-async function conGuiaDeTalles(env, p, yo) {
-  const b = await buscarGuia(env, p, yo);
+async function conGuiaDeTalles(env, p, yo, busqueda) {
+  const b = busqueda || await buscarGuia(env, p, yo);   // con varios talles la guía se busca una sola vez
   if (!b.pide) return { p };
   if (b.error) return { error: b.error };
   const talle = String((p.atributos || []).find(a => a.id === 'SIZE')?.valor ?? '').trim();
@@ -618,16 +629,44 @@ async function guiaTalles(env, cuerpo) {
   };
 }
 
-/** Revisa la publicación con el validador de MercadoLibre. No publica nada. */
+/**
+ * Revisa la publicación con el validador de MercadoLibre. No publica nada.
+ * Con `publicacion.talles` (ropa y calzado) revisa un ítem por talle: con User Products no hay `variations`.
+ */
 async function revisar(env, cuerpo) {
+  const talles = limpiarTalles(cuerpo.publicacion?.talles);
+  return talles.length ? revisarVarios(env, cuerpo, talles) : revisarUno(env, cuerpo);
+}
+
+async function revisarVarios(env, cuerpo, talles) {
+  const p = cuerpo.publicacion;
+  const fotos = await subirFotos(env, cuerpo.fotos || []);
+  const falta = faltantes({ ...conTalle(p, talles[0]), fotos });
+  if (falta.length) return { ok: false, fotos, errores: [`Falta completar: ${falta.join(', ')}.`] };
+  const yo = await usuario(env);
+  const busqueda = await buscarGuia(env, conTalle(p, talles[0]), yo);
+  const porTalle = [];
+  for (const talle of talles) {
+    const r = await revisarUno(env, { publicacion: conTalle(p, talle), fotos: fotos.map(id => ({ id })) }, { yo, busqueda });
+    porTalle.push({ talle, ok: !!r.ok, errores: r.errores || [], avisos: r.avisos || [], guia: r.guia || null });
+  }
+  return {
+    ok: porTalle.every(t => t.ok), fotos, porTalle,
+    errores: porTalle.flatMap(t => t.errores.map(e => `Talle ${t.talle}: ${e}`)),
+    avisos: [...new Set(porTalle.flatMap(t => t.avisos))],
+    guia: porTalle.find(t => t.guia)?.guia || null
+  };
+}
+
+async function revisarUno(env, cuerpo, ctx = {}) {
   const p = cuerpo.publicacion || {};
   const fotos = await subirFotos(env, cuerpo.fotos || []);
   let conFotos = { ...p, fotos };
   const falta = faltantes(conFotos);
   if (falta.length) return { ok: false, fotos, errores: [`Falta completar: ${falta.join(', ')}.`] };
 
-  const yo = await usuario(env);
-  const g = await conGuiaDeTalles(env, conFotos, yo);
+  const yo = ctx.yo || await usuario(env);
+  const g = await conGuiaDeTalles(env, conFotos, yo, ctx.busqueda);
   if (g.error) return { ok: false, fotos, errores: [g.error] };
   conFotos = g.p;
   const item = armarItem(conFotos, { userProducts: yo.userProducts });
@@ -646,8 +685,11 @@ async function revisar(env, cuerpo) {
 
 const SIN_REVISAR = 'Esta publicación no pasó la revisión de MercadoLibre con este contenido (o cambió después). Tocá Publicar de nuevo para que la revise.';
 
-/** Publica de verdad. La app lo llama solo después de que Nico confirma. */
-async function publicar(env, cuerpo) {
+/**
+ * Prepara lo que se va a publicar y comprueba que pasó la revisión, SIN publicar nada.
+ * Tira 412 si no pasó (o cambió), 422 si la guía de talles no sirve, 400 si falta algo.
+ */
+async function prepararPublicacion(env, cuerpo, ctx = {}) {
   const p = cuerpo.publicacion || {};
   // Una foto sin id nunca pasó por la revisión (la revisión es la que las sube): no se sube nada acá.
   if ((cuerpo.fotos || []).some(f => !f.id)) throw Object.assign(new Error(SIN_REVISAR), { status: 412 });
@@ -656,21 +698,25 @@ async function publicar(env, cuerpo) {
   const falta = faltantes(conFotos);
   if (falta.length) throw Object.assign(new Error(`Falta completar: ${falta.join(', ')}.`), { status: 400 });
 
-  const yo = await usuario(env);
+  const yo = ctx.yo || await usuario(env);
   // La guía de talles se vuelve a buscar igual que en la revisión: si cambió, el sello no coincide y pide revisar de nuevo.
-  const g = await conGuiaDeTalles(env, conFotos, yo);
+  const g = await conGuiaDeTalles(env, conFotos, yo, ctx.busqueda);
   if (g.error) throw Object.assign(new Error(g.error), { status: 422 });
   conFotos = g.p;
   const cuerpoItem = armarItem(conFotos, { userProducts: yo.userProducts });
   // Solo se publica el contenido exacto que aprobó el validador (POST /items/validate, vía /api/revisar).
   const sello = paraHuella(cuerpoItem, p.descripcion);
   if (!(await estaValidado(env.KV, sello))) throw Object.assign(new Error(SIN_REVISAR), { status: 412 });
+  return { cuerpoItem, sello, descripcion: limpiarDescripcion(p.descripcion) };
+}
+
+/** Publica de verdad un ítem ya preparado y comprobado. */
+async function emitirPublicacion(env, { cuerpoItem, sello, descripcion }) {
   const { datos: item } = await ml(env, '/items', { metodo: 'POST', cuerpo: cuerpoItem });
   await gastarValidacion(env.KV, sello);
 
   // La descripción va aparte y después: si falla, la publicación ya existe y se avisa.
   let avisoDescripcion = null;
-  const descripcion = limpiarDescripcion(p.descripcion);
   if (descripcion) {
     try {
       await ml(env, `/items/${item.id}/description`, { metodo: 'POST', cuerpo: { plain_text: descripcion } });
@@ -679,6 +725,44 @@ async function publicar(env, cuerpo) {
     }
   }
   return { id: item.id, permalink: item.permalink, estado: item.status, avisoDescripcion };
+}
+
+/**
+ * Publica de verdad. La app lo llama solo después de que Nico confirma.
+ * Con `publicacion.talles` publica un ítem por talle: antes de publicar ninguno se comprueba que TODOS pasaron la
+ * revisión (si uno no, no sale nada); después, si ML rechaza uno, los demás siguen y el resultado lo informa en `fallaron`.
+ */
+async function publicar(env, cuerpo) {
+  const talles = limpiarTalles(cuerpo.publicacion?.talles);
+  if (!talles.length) return emitirPublicacion(env, await prepararPublicacion(env, cuerpo));
+
+  const p = cuerpo.publicacion;
+  if ((cuerpo.fotos || []).some(f => !f.id)) throw Object.assign(new Error(SIN_REVISAR), { status: 412 });
+  const fotos = await subirFotos(env, cuerpo.fotos || []);
+  const yo = await usuario(env);
+  const busqueda = await buscarGuia(env, conTalle(p, talles[0]), yo);
+  const preparados = [];
+  for (const talle of talles) {
+    try {
+      preparados.push({ talle, prep: await prepararPublicacion(env, { publicacion: conTalle(p, talle), fotos: fotos.map(id => ({ id })) }, { yo, busqueda }) });
+    } catch (e) {
+      if (e.status !== 412) e.message = `Talle ${talle}: ${e.message}`;
+      throw e;
+    }
+  }
+  const items = [];
+  const fallaron = [];
+  for (const { talle, prep } of preparados) {
+    try {
+      const r = await emitirPublicacion(env, prep);
+      items.push({ talle, ...r });
+    } catch (e) {
+      fallaron.push({ talle, error: e.message });
+    }
+  }
+  if (!items.length) throw Object.assign(new Error(`No salió ningún talle. ${fallaron[0].error}`), { status: 502 });
+  const primero = items[0];
+  return { id: primero.id, permalink: primero.permalink, estado: primero.estado, avisoDescripcion: items.find(i => i.avisoDescripcion)?.avisoDescripcion || null, items, fallaron };
 }
 
 /* ---------- entrada ---------- */

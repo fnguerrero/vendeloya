@@ -1,51 +1,41 @@
-# SPEC — ronda 5: 20 mejoras (5 grandes + 15 chicas)
+# SPEC — ronda 6 (14/11/2026): varios talles + editar lo publicado
 
 ## Objetivo
-Que VendeloYa sirva también después del botón Publicar: ver y responder preguntas, retocar precio o pausar sin entrar a MercadoLibre, comparar con artículos parecidos, mejorar la foto con un toque, y un panel de totales. Más quince mejoras de uso chicas en el historial, la revisión y la configuración. Rondas anteriores en `ronda-1-esteticas/`, `ronda-2-uso/` y `ronda-3-uso-y-4-editor/`; el seguimiento del historial (estado, visitas, preguntas) se hizo el 31/10 fuera de nonstop (commit 40618b2).
+1. **Varios talles en una publicación de ropa/calzado.** Con User Products (la cuenta de Nico es `user_product_seller`) MercadoLibre NO acepta el arreglo `variations` (error); cada talle es un ítem propio con el mismo `family_name`. Entonces "varios talles" = un campo "Talles a publicar" y la app/Worker revisan y publican un ítem por talle (cada uno con su fila de la guía), con un solo botón.
+2. **Editar lo ya publicado, más allá de precio/pausar/cerrar**: cambiar la descripción y el stock (cantidad disponible) desde el panel de la publicada.
 
 ## Alcance
-Entra: `worker/` (rutas nuevas, lógica pura en `logica.js` con tests), `index.html`, `styles.css`, `app.js`, `editor.js`, `sw.js` y el modo demo (`?demo`), que se amplía para poder verificar sin la cuenta real.
-No entra: publicar nada nuevo en MercadoLibre (pedido explícito de la sesión Emprendimientos), tocar la paleta o el logo, dependencias nuevas. Commit sí (CLAUDE.md: no pide confirmación); **push y deploy solo con el OK de Nico al final**.
+Entra: Worker (`logica.js`, `worker.js`, tests), app (campo de talles, resultado por talle, panel con otros talles, editar descripción y stock, demo), README/NOTAS.
+NO entra: variaciones reales (`variations`, no existen en UP), editar el título (en UP el nombre es `family_name` y no se edita), editar fotos/atributos, seguimiento (visitas/estado) de los talles extra (solo se listan con link), cola persistente, Gemini.
 
-## Stack y decisiones
-- Vanilla JS + CSS, sin dependencias. Lógica nueva del Worker en `logica.js` (pura, testeable con `node test.mjs`).
-- Acciones sobre publicaciones vía la API de MercadoLibre: `PUT /items/{id}` (price, status), `POST /answers` (responder), `GET /my/received_questions/search` (preguntas).
-- IA para fotos con Workers AI (binding `AI` en `wrangler.toml`, cuota gratis 10.000 neurons/día). Nunca automática: botón "Mejorar con IA", antes/después, y la original queda guardada (ya lo hace el editor).
-- Borrador de respuesta a preguntas con Claude (`ia.js`), a partir de título, descripción, nota privada y la pregunta. Nico siempre aprueba antes de enviar.
-- Verificación: `node test.mjs`, `node --check`, y el demo en el preview local (puerto 5610 si sigue vivo, si no `py -3 -m http.server 5611`) con JS (DOM, eventos simulados) y capturas en escritorio y 375×812.
-- `?v=` de app.js/styles.css y `VERSION` del service worker suben una sola vez, al final.
+## Reglas duras (de Nico y de ★ Emprendimientos)
+- Nada contra publicaciones reales de ML: sin POST real a `/api/publicar`, sin PUT real a publicaciones, sin responder preguntas ni cambiar precios reales. Todo se prueba con ML simulado en `test.mjs` y con `?demo`. La única llamada real permitida es `/api/revisar` (validate) de `tools/validar-lote.mjs`, que no publica.
+- Nunca se crea una guía de talles en la cuenta.
+- Sin secretos en pantalla ni en archivos. No tocar % ni ClickUp.
+- Commits sin atribución de IA. Push solo a `fnguerrero/vendeloya` (permitido). **Deploy con wrangler: pide OK de Nico** (settings del proyecto); no se despliega solo.
 
-## Supuestos
-- "Fondo limpio" depende de que Workers AI tenga un modelo de segmentación o quita-fondo. Si no lo hay, la mejora con IA pasa a ser **recorte automático al producto** (detección de objetos `@cf/facebook/detr-resnet-50`) + auto-niveles en canvas, con el mismo botón y antes/después. Se decide al llegar al ítem mirando `npx wrangler ai models`.
-- **Decidido en la iteración 4:** `wrangler ai models` no tiene ningún modelo de segmentación ni quita-fondo; lo único que edita imágenes es FLUX.2 klein (generativo), que puede cambiar el producto y para una venta eso es engañar al comprador. Así que "Mejorar con IA" pasa a ser **"Mejorar con un toque"** en el cliente: auto-niveles, balance de blancos y nitidez suave en canvas, con antes/después y la original guardada. Sin Worker ni binding AI. Es un desvío de la SPEC y va al informe.
-- "Borradores en la nube" ya existe (los registros viven en KV): la quinta grande pasa a ser el **panel de totales** del historial.
-- "Sugerencia de precio" ya existe como rango de mercado: la grande es mostrar los **parecidos** (título, precio, link) que ese rango usa, para comparar a ojo.
-- Marcar vendida = cerrar la publicación en MercadoLibre (`status: closed`), irreversible: pide confirmación en la app.
-- Las respuestas a preguntas se envían solo al tocar "Enviar"; el borrador de la IA es editable.
-- En demo, preguntas, parecidos, acciones e IA se simulan en `apiDemo` con datos fijos.
+## Supuestos (decididos sin preguntar)
+- Un talle = un ítem con el mismo título, precio, fotos y descripción; `cantidad` es por talle. Máximo 12 talles por publicación.
+- Si hay lista de talles, el atributo SIZE del formulario se ignora (el Worker lo pisa por talle); 1 talle en la lista = publicación normal de ese talle.
+- Revisión por talle: cada uno pasa por `/items/validate` con su fila de guía; `ok` global solo si todos pasan. Los errores se prefijan «Talle X: …». La guía se busca una sola vez por revisión (misma guía para todos los talles).
+- Publicación por talle: si uno falla se sigue con los demás y se informa; no hay rollback (lo ya publicado queda). La app deja en el campo solo los talles que fallaron.
+- El Worker devuelve `id`/`permalink` del primer talle publicado (compatibilidad) y `items:[{talle,id,permalink,estado}]`; el registro guarda `ml:{id, permalink, items}`.
+- Editar descripción: `PUT /items/{id}/description {plain_text}`, con respaldo a `POST` si la publicación no tenía descripción (404). Se limpia con `limpiarDescripcion`. Editar stock: `PUT /items/{id} {available_quantity}` entero 1–999999 (para 0 está "Marcar vendida"/pausar).
+- El panel de editar usa `POST /api/publicaciones/<mlId>` con `accion: 'descripcion' | 'stock'` (misma ruta que precio/pausar).
 
 ## Criterios de aceptación
-1. Preguntas: desde el historial se abren las preguntas sin responder de una publicación, se puede pedir un borrador a la IA, editarlo y enviarlo; la enviada desaparece de la lista.
-2. Parecidos: en la revisión, debajo del rango de precio, se ven hasta 5 artículos parecidos con precio y link (o nada, sin error, si MercadoLibre no los da).
-3. Editar lo publicado: desde el historial, una publicada permite cambiar el precio, pausar/reactivar y marcar vendida (con confirmación); el chip y el seguimiento se actualizan.
-4. Mejorar con IA: en el editor hay un botón que mejora la foto (fondo o recorte automático según el modelo disponible), muestra antes/después y permite descartar; la original sigue disponible.
-5. Totales: arriba del historial, activas, vendidas, $ vendido, visitas y preguntas sin responder, calculados del seguimiento.
-6. Fechas relativas en el historial (hoy, ayer, hace N días, luego dd/mm).
-7. Filtro "Vendidas" en el historial, con su cuenta.
-8. Copiar link de cada publicada desde el historial, con toast.
-9. Contador de fotos en la revisión y aviso (no bloqueante) con menos de 3 fotos.
-10. Texto de posición del precio frente al mercado (por debajo / dentro / por encima).
-11. Chips para sumar al título la marca o el modelo que la IA vio y faltan.
-12. Botón "+ Medidas" en la descripción que inserta alto/ancho/largo/peso cargados.
-13. Atajos: Esc vuelve o cierra, "/" enfoca la búsqueda, Ctrl+S guarda ya.
-14. Pantalla "Publicada" con miniatura, precio y botón al historial.
-15. Arrastrar fotos sobre toda la página con un velo "Soltá acá".
-16. Exportar historial como JSON desde Configuración.
-17. En celu, el botón Publicar queda fijo abajo en la revisión.
-18. Tema claro / oscuro / automático en Configuración, recordado por dispositivo.
-19. "Actualizado hace N min" junto al botón Actualizar del historial, que gira mientras carga.
-20. Aviso antes de publicar si ya hay una publicación activa con título muy parecido.
-21. Sin errores en consola en demo, sin scroll horizontal en celu, todos los tests del Worker en verde, `node --check` limpio.
+1. `cambioPublicacion('stock', 5)` → `{available_quantity:5}`; rechaza 0, negativos, decimales y no numéricos. `descripcion` se valida y limpia (vacía = error).
+2. `limpiarTalles` deduplica, recorta, descarta vacíos, máx 12; acepta coma, punto y coma, salto de línea.
+3. Worker `/api/revisar` con 3 talles: 3 llamadas a validate, cada ítem con su `SIZE_GRID_ROW_ID` y `SIZE`; `ok` true; `porTalle` con 3 resultados; la guía se busca una vez.
+4. Un talle que no está en la guía → `ok:false`, error «Talle X: …», y los demás se validan igual.
+5. `/api/publicar` con 3 talles: 3 POST a `/items` con SIZE distinto y el mismo `family_name`; devuelve `items` con 3 ids; con talles no revisados → 412 sin publicar nada.
+6. Publicar con un talle que falla en ML: los otros salen, `fallaron` lista el que falló y el motivo.
+7. Worker: `descripcion` hace PUT y cae a POST si da 404; `stock` hace PUT; ninguna otra llamada de escritura.
+8. Mutantes: cada pieza nueva tiene un mutante que rompe algún test.
+9. App en `?demo`: categoría con SIZE muestra "Talles a publicar"; con `40, 41, 42` Publicar revisa y confirma "3 publicaciones"; publicar deja el listo con los 3 links; el panel de la publicada muestra los otros talles.
+10. App en `?demo`: el panel permite cambiar descripción y stock y se ve el cambio.
+11. 0 errores de consola; celu 375 sin scroll horizontal; `node test.mjs` en verde; `node --check` limpio en los JS tocados; `sw.js` VERSION y `?v=` subidos.
+12. `tools/validar-lote.mjs` sigue dando 8 de 8 (no se reejecuta: lo corre Nico) — el cambio no toca el camino de un solo talle sin lista.
 
 ## Presupuesto
-40 iteraciones.
+30 iteraciones.

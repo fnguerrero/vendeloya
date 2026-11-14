@@ -107,6 +107,46 @@ export function limpiarDescripcion(texto) {
     .trim();
 }
 
+/** La descripción nueva de una publicada, limpia. Vacía no se acepta (ML no deja borrarla así). */
+export function validarDescripcion(texto) {
+  const t = limpiarDescripcion(texto);
+  if (t.length < 2) throw Object.assign(new Error('Escribí la descripción.'), { status: 400 });
+  if (t.length > 50000) throw Object.assign(new Error('La descripción es demasiado larga.'), { status: 400 });
+  return t;
+}
+
+/* ---------- varios talles: un ítem por talle ---------- */
+
+export const MAX_TALLES = 12;
+
+/**
+ * Lista de talles a publicar, sin repetidos ni vacíos, en el orden en que vinieron. Acepta un arreglo o un texto
+ * separado por comas, punto y coma o saltos de línea. Con User Products MercadoLibre no admite `variations`:
+ * cada talle es un ítem propio.
+ */
+export function limpiarTalles(entrada) {
+  const crudo = Array.isArray(entrada) ? entrada : String(entrada ?? '').split(/[,;\n]/);
+  const vistos = new Set();
+  const lista = [];
+  for (const t of crudo) {
+    const talle = String(t ?? '').replace(/\s+/g, ' ').trim();
+    const clave = talle.toLowerCase();
+    if (!talle || vistos.has(clave)) continue;
+    vistos.add(clave);
+    lista.push(talle);
+  }
+  if (lista.length > MAX_TALLES) throw Object.assign(new Error(`Son demasiados talles: el máximo es ${MAX_TALLES} por publicación.`), { status: 400 });
+  return lista;
+}
+
+/** La publicación con ese talle puesto (reemplaza o agrega SIZE). No muta la original. */
+export function conTalle(p, talle) {
+  const resto = (p.atributos || []).filter(a => a.id !== 'SIZE');
+  const size = (p.atributos || []).find(a => a.id === 'SIZE') || { id: 'SIZE', nombre: 'Talle', opciones: [] };
+  const { talles, ...sinLista } = p;
+  return { ...sinLista, atributos: [...resto, { ...size, valor: talle }] };
+}
+
 /* ---------- envío: peso y medidas del paquete ---------- */
 
 const MEDIDA_PAQUETE = { pesoG: 'SELLER_PACKAGE_WEIGHT', largoCm: 'SELLER_PACKAGE_LENGTH', anchoCm: 'SELLER_PACKAGE_WIDTH', altoCm: 'SELLER_PACKAGE_HEIGHT' };
@@ -391,12 +431,17 @@ export function armarSeguimiento(items, visitas = {}, preguntas = []) {
 
 const err400 = m => Object.assign(new Error(m), { status: 400 });
 
-/** Cuerpo del PUT /items/{id} para cada acción de la app. */
-export function cambioPublicacion(accion, precio) {
+/** Cuerpo del PUT /items/{id} para cada acción de la app (precio y stock llevan su valor). */
+export function cambioPublicacion(accion, valor) {
   if (accion === 'precio') {
-    const p = Math.round(Number(precio));
+    const p = Math.round(Number(valor));
     if (!Number.isFinite(p) || p <= 0) throw err400('El precio tiene que ser un número mayor a cero.');
     return { price: p };
+  }
+  if (accion === 'stock') {
+    const n = Number(valor);
+    if (valor === '' || valor === null || !Number.isInteger(n) || n < 1 || n > 999999) throw err400('El stock tiene que ser un número entero de 1 a 999999 (para dejar de vender, pausá o cerrá la publicación).');
+    return { available_quantity: n };
   }
   const estados = { pausar: 'paused', reactivar: 'active', vendida: 'closed' };
   if (!estados[accion]) throw err400('Acción desconocida.');

@@ -1,0 +1,24 @@
+# TODO — ronda 5
+
+- [x] 0. Ganchos: demo con seguimiento, preguntas, parecidos y acciones simuladas; `window.__vy` expone lo nuevo · verif: en `?demo` las rutas nuevas devuelven datos fijos sin red
+- [x] 1. Preguntas: Worker `GET /api/preguntas`, `POST /api/preguntas/<id>/responder`, `POST /api/preguntas/<id>/borrador` (Claude) + diálogo en la app desde "N sin responder" · verif: demo responde y la lista baja; test de `armarRespuesta`/`validarRespuesta`
+- [x] 2. Parecidos: `precioDeMercado` devuelve hasta 5 parecidos y la revisión los lista bajo el rango · verif: demo muestra 5 con link; sin parecidos no hay error
+- [x] 3. Editar lo publicado: Worker `POST /api/publicaciones/<mlId>` (precio | pausar | reactivar | vendida) + menú "⋯" en el historial con confirmación para vendida · verif: demo cambia chip y precio; test de `cambioPublicacion`
+- [x] 4. Mejorar con un toque (ver Supuestos; sin IA): binding AI, ruta `POST /api/foto/mejorar`, botón en el editor con antes/después · verif: `wrangler ai models` para elegir modelo; demo simula; prueba real solo si el deploy se aprueba
+- [x] 5. Totales del historial (activas, vendidas, $ vendido, visitas, sin responder) · verif: demo con 5 registros da los números esperados
+- [x] 6. Fechas relativas (hoy, ayer, hace N días, dd/mm) · verif: `fecha()` con 4 fechas en consola
+- [x] 7. Filtro "Vendidas" en el historial · verif: demo cuenta 1 vendida
+- [x] 8. Copiar link por publicada (en el panel que abre cada publicada del historial) · verif: demo, clipboard simulado, toast
+- [x] 9. Contador de fotos y aviso con menos de 3 · verif: demo con 2 fotos muestra el aviso, con 3 no
+- [x] 10. Posición del precio frente al mercado · verif: demo con precio bajo / medio / alto
+- [x] 11. Chips de marca/modelo faltantes en el título · verif: demo, tocar el chip agrega la palabra
+- [x] 12. "+ Medidas" en la descripción · verif: demo con alto/ancho cargados inserta la línea una vez
+- [x] 13. Atajos Esc, "/", Ctrl+S · verif: KeyboardEvent en demo
+- [x] 14. Pantalla Publicada con miniatura, precio y botón al historial · verif: demo publicar
+- [x] 15. Arrastrar fotos sobre toda la página · verif: dragenter/drop simulados agregan la foto
+- [x] 16. Exportar historial JSON · verif: demo genera blob con N registros
+- [x] 17. Compartir por WhatsApp desde el panel de la publicación (texto con título, precio y link) · verif: demo, open() simulado recibe wa.me con el texto. (El "Publicar fijo abajo en celu" ya existía: .col-datos .acciones es sticky desde la ronda 2)
+- [x] 18. Tema claro / oscuro / automático · verif: data-theme y color de fondo computado
+- [x] 19. "Actualizado hace N min" y botón girando · verif: demo
+- [x] 20. Aviso de título muy parecido a una activa · verif: demo con título repetido muestra aviso
+- [x] 21. Cierre: subir `?v=` y VERSION, tests, consola, capturas, commit

@@ -11,7 +11,8 @@ import {
   leerComisiones, calcularGanancia, precioDeEquilibrio,
   leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete,
   huellaItem, paraHuella, marcarValidado, estaValidado, gastarValidacion, leerVisitas,
-  requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia
+  requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia,
+  validarDescripcion, limpiarTalles, conTalle, MAX_TALLES
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -1216,6 +1217,261 @@ await testA('Worker: ropa y calzado buscan la guía (solo lectura), la asocian a
     const buscadas = llamadas.filter(l => l === 'POST /catalog/charts/search').length;
     assert.equal((await llamar('/api/guia-talles', { categoria: 'MLA5232' })).pide, false);
     assert.equal(llamadas.filter(l => l === 'POST /catalog/charts/search').length, buscadas);
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+});
+
+/* ---------- varios talles y editar lo publicado ---------- */
+
+test('cambioPublicacion stock: entero de 1 a 999999; rechaza 0, negativos, decimales, vacío y texto', () => {
+  assert.deepEqual(cambioPublicacion('stock', 5), { available_quantity: 5 });
+  assert.deepEqual(cambioPublicacion('stock', '12'), { available_quantity: 12 });
+  assert.deepEqual(cambioPublicacion('stock', 999999), { available_quantity: 999999 });
+  for (const malo of [0, -3, 2.5, '', null, undefined, 'abc', 1000000, NaN]) {
+    assert.throws(() => cambioPublicacion('stock', malo), /stock tiene que ser/, `debería rechazar ${String(malo)}`);
+  }
+  assert.deepEqual(cambioPublicacion('precio', '85000.4'), { price: 85000 }, 'el precio sigue igual');
+});
+
+test('validarDescripcion: la deja en texto plano y no acepta vacía', () => {
+  assert.equal(validarDescripcion('  Hola <b>mundo</b> 😀\r\n\r\n\r\n\r\nChau  '), 'Hola mundo\n\nChau');
+  assert.throws(() => validarDescripcion(''), /Escribí la descripción/);
+  assert.throws(() => validarDescripcion('  <p> </p> 😀 '), /Escribí la descripción/);
+  assert.throws(() => validarDescripcion(null), /Escribí la descripción/);
+  assert.throws(() => validarDescripcion('a'.repeat(50001)), /demasiado larga/);
+});
+
+test('limpiarTalles: sin vacíos ni repetidos (sin importar mayúsculas), separa por coma, punto y coma o línea, y tope', () => {
+  assert.deepEqual(limpiarTalles('40, 41;42\n43,, 41 ,  '), ['40', '41', '42', '43']);
+  assert.deepEqual(limpiarTalles(['M', ' m ', 'L', '', null, 'XL']), ['M', 'L', 'XL']);
+  assert.deepEqual(limpiarTalles('41  AR,41 ar'), ['41 AR']);
+  assert.deepEqual(limpiarTalles(undefined), []);
+  assert.deepEqual(limpiarTalles(''), []);
+  assert.equal(limpiarTalles(Array.from({ length: MAX_TALLES }, (_, i) => `T${i}`)).length, MAX_TALLES);
+  assert.throws(() => limpiarTalles(Array.from({ length: MAX_TALLES + 1 }, (_, i) => `T${i}`)), /máximo es 12/);
+  // los repetidos no cuentan para el tope
+  assert.equal(limpiarTalles([...Array.from({ length: MAX_TALLES }, (_, i) => `T${i}`), 'T0']).length, MAX_TALLES);
+});
+
+test('conTalle: pone SIZE (reemplaza o agrega), saca la lista de talles y no muta la original', () => {
+  const base = { titulo: 'Zapas', talles: ['40', '41'], atributos: [{ id: 'SIZE', valor: 'x', opciones: [{ id: '1', nombre: '40' }] }, { id: 'BRAND', valor: 'Adidas' }] };
+  const p = conTalle(base, '41');
+  assert.equal(p.atributos.filter(a => a.id === 'SIZE').length, 1);
+  assert.equal(p.atributos.find(a => a.id === 'SIZE').valor, '41');
+  assert.equal(p.atributos.find(a => a.id === 'BRAND').valor, 'Adidas');
+  assert.equal(p.talles, undefined);
+  assert.equal(base.atributos[0].valor, 'x');
+  assert.deepEqual(base.talles, ['40', '41']);
+  const sin = conTalle({ titulo: 'Remera', atributos: [{ id: 'BRAND', valor: 'Nike' }] }, 'M');
+  assert.deepEqual(sin.atributos.find(a => a.id === 'SIZE').valor, 'M');
+  assert.equal(conTalle({ titulo: 'X' }, 'S').atributos[0].valor, 'S');
+});
+
+await testA('Worker: varios talles = un ítem por talle (revisar, publicar, un rechazo no frena a los demás, sin revisar no sale nada)', async () => {
+  const { default: worker } = await import('./worker.js');
+  const zap = contrato.casos.find(x => x.categoria.id === 'MLA109027');
+  const llamadas = [];
+  const validados = [];
+  const creados = [];
+  let malos = new Set();       // talles que el validador rechaza
+  let rechazaAlCrear = null;   // talle que ML rechaza al POST /items
+  let serie = 0;
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    llamadas.push(`${init.method || 'GET'} ${ruta}`);
+    const r = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    const talleDe = it => it.attributes.find(a => a.id === 'SIZE')?.value_name;
+    if (ruta === '/users/me') return r(200, { id: 77, nickname: 'prueba', tags: ['user_product_seller'] });
+    if (ruta === '/categories/MLA109027/attributes') return r(200, zap.atributos);
+    if (ruta === '/categories/MLA109027') return r(200, zap.categoria);
+    if (ruta.startsWith('/sites/MLA/domain_discovery/search')) return r(200, zap.discovery);
+    if (ruta === '/catalog/charts/search') return r(200, { charts: [{ id: '426238', type: 'STANDARD', names: { MLA: 'Standard' } }] });
+    if (ruta === '/catalog/charts/426238') return r(200, guiaFalsa());
+    if (ruta === '/items/validate') {
+      const it = JSON.parse(init.body); validados.push(it);
+      return malos.has(talleDe(it)) ? r(400, { cause: [{ type: 'error', code: 'item.attribute.invalid', message: `talle ${talleDe(it)} inválido` }] }) : r(200, {});
+    }
+    if (ruta === '/items') {
+      const it = JSON.parse(init.body);
+      if (talleDe(it) === rechazaAlCrear) return r(400, { message: 'ML dijo que no', cause: [] });
+      creados.push(it); serie++;
+      return r(201, { id: `MLA99900${serie}`, permalink: `https://articulo.mercadolibre.com.ar/MLA-99900${serie}`, status: 'active' });
+    }
+    if (ruta.endsWith('/description')) return r(201, {});
+    return r(404, { message: `ruta no simulada: ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 77, vence: Date.now() + 3600e3 }));
+    const env = { KV: kv, APP_SECRET: 'secreto' };
+    const llamar = async (ruta, cuerpo) => {
+      const res = await worker.fetch(new Request(`https://w.test${ruta}`, { method: 'POST', body: JSON.stringify(cuerpo),
+        headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto', 'content-type': 'application/json' } }), env);
+      return { status: res.status, ...(await res.json()) };
+    };
+    const pub = (talles, extra = {}) => ({ titulo: 'Zapatillas running', categoria: 'MLA109027', precio: 30000, condicion: 'usado', cantidad: 2, tipoPublicacion: 'gold_special',
+      envio: 'retiro', descripcion: 'Casi nuevas', talles,
+      atributos: [{ id: 'SIZE', valor: '', opciones: [] }, { id: 'GENDER', valor: 'Hombre', opciones: [] }, { id: 'BRAND', valor: 'Adidas', opciones: [] }], ...extra });
+    const cuerpo = (talles, extra) => ({ publicacion: pub(talles, extra), fotos: [{ id: 'p1' }] });
+    const buscadas = () => llamadas.filter(l => l === 'POST /catalog/charts/search').length;
+    const tallesDe = lista => lista.map(it => it.attributes.find(a => a.id === 'SIZE').value_name);
+
+    // 1) revisar 3 talles: un validate por talle, cada uno con su fila, la guía se busca UNA vez
+    let r = await llamar('/api/revisar', cuerpo(['40', '41 AR', ' 42 ', '40']));
+    assert.equal(r.status, 200);
+    assert.equal(r.ok, true);
+    assert.equal(validados.length, 3, 'el 40 repetido no cuenta dos veces');
+    assert.deepEqual(tallesDe(validados), ['40 AR', '41 AR', '42 AR']);
+    assert.deepEqual(validados.map(it => it.attributes.find(a => a.id === 'SIZE_GRID_ROW_ID').value_name), ['426238:1', '426238:2', '426238:3']);
+    assert.ok(validados.every(it => it.family_name === 'Zapatillas running' && it.available_quantity === 2));
+    assert.equal(buscadas(), 1, 'la guía se busca una sola vez');
+    assert.deepEqual(r.porTalle.map(t => [t.talle, t.ok]), [['40', true], ['41 AR', true], ['42', true]]);
+
+    // 2) un talle que no está en la guía: ok false, error «Talle 99: …», y los demás se validan igual
+    validados.length = 0;
+    r = await llamar('/api/revisar', cuerpo(['41', '99', '42']));
+    assert.equal(r.ok, false);
+    assert.equal(validados.length, 2, 'el 99 no llega al validador');
+    assert.match(r.errores[0], /^Talle 99: El talle «99» no está en la guía de talles/);
+    assert.deepEqual(r.porTalle.map(t => t.ok), [true, false, true]);
+
+    // 2b) un talle que el validador rechaza: su error lleva el talle; los demás pasan
+    malos = new Set(['42 AR']);
+    r = await llamar('/api/revisar', cuerpo(['41', '42']));
+    assert.equal(r.ok, false);
+    assert.ok(r.errores.some(e => /^Talle 42: .*inválido/.test(e)), r.errores.join(' | '));
+    assert.deepEqual(r.porTalle.map(t => t.ok), [true, false]);
+    malos = new Set();
+
+    // 3) publicar SIN revisar un talle nuevo: 412 y no sale ninguno (aunque los otros sí estén revisados)
+    r = await llamar('/api/revisar', cuerpo(['40', '41'], { precio: 31000 }));
+    assert.equal(r.ok, true);
+    r = await llamar('/api/publicar', cuerpo(['40', '41', '42'], { precio: 31000 }));   // el 42 a 31000 nunca se revisó
+    assert.equal(r.status, 412);
+    assert.equal(creados.length, 0, 'si falta revisar uno, no se publica ninguno');
+
+    // 4) revisados todos: salen 3 ítems, uno por talle, con el mismo family_name; id del primero + items
+    r = await llamar('/api/revisar', cuerpo(['40', '41', '42']));
+    assert.equal(r.ok, true);
+    r = await llamar('/api/publicar', cuerpo(['40', '41', '42']));
+    assert.equal(r.status, 200);
+    assert.equal(creados.length, 3);
+    assert.deepEqual(tallesDe(creados), ['40 AR', '41 AR', '42 AR']);
+    assert.ok(creados.every(it => it.family_name === 'Zapatillas running'));
+    assert.deepEqual(r.items.map(i => [i.talle, i.id]), [['40', 'MLA999001'], ['41', 'MLA999002'], ['42', 'MLA999003']]);
+    assert.equal(r.id, 'MLA999001');
+    assert.equal(r.permalink, 'https://articulo.mercadolibre.com.ar/MLA-999001');
+    assert.deepEqual(r.fallaron, []);
+    assert.ok(['MLA999001', 'MLA999002', 'MLA999003'].every(id => llamadas.includes(`POST /items/${id}/description`)));
+
+    // 4b) la revisión se gasta: repetir no crea de nuevo
+    r = await llamar('/api/publicar', cuerpo(['40', '41', '42']));
+    assert.equal(r.status, 412);
+    assert.equal(creados.length, 3);
+
+    // 5) ML rechaza uno al crear: los otros salen y `fallaron` dice cuál y por qué
+    creados.length = 0;
+    await llamar('/api/revisar', cuerpo(['41', '42']));
+    rechazaAlCrear = '41 AR';
+    r = await llamar('/api/publicar', cuerpo(['41', '42']));
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.items.map(i => i.talle), ['42']);
+    assert.equal(r.fallaron.length, 1);
+    assert.equal(r.fallaron[0].talle, '41');
+    assert.match(r.fallaron[0].error, /ML dijo que no/);
+    assert.equal(creados.length, 1);
+
+    // 6) si ML rechaza todos: error (no 200) y no queda nada creado
+    creados.length = 0;
+    await llamar('/api/revisar', cuerpo(['41']));
+    r = await llamar('/api/publicar', cuerpo(['41']));
+    assert.equal(r.status, 502);
+    assert.match(r.error, /No salió ningún talle/);
+    rechazaAlCrear = null;
+
+    // 7) sin lista de talles, todo sigue como antes: un solo ítem con el SIZE del formulario
+    validados.length = 0;
+    r = await llamar('/api/revisar', cuerpo(undefined, { atributos: [{ id: 'SIZE', valor: '41', opciones: [] }, { id: 'GENDER', valor: 'Hombre', opciones: [] }, { id: 'BRAND', valor: 'Adidas', opciones: [] }] }));
+    assert.equal(r.ok, true);
+    assert.equal(r.porTalle, undefined);
+    assert.equal(validados.length, 1);
+    // y una lista con 13 talles se rechaza antes de llamar a nadie
+    const antes = llamadas.length;
+    r = await llamar('/api/revisar', cuerpo(Array.from({ length: 13 }, (_, i) => String(36 + i))));
+    assert.equal(r.status, 400);
+    assert.match(r.error, /máximo es 12/);
+    assert.equal(llamadas.length, antes);
+
+    // jamás se escribe en /catalog/charts
+    assert.ok(!llamadas.some(l => /^(POST|PUT|DELETE|PATCH) \/catalog\/charts(?!\/search)/.test(l)));
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+});
+
+await testA('Worker: editar lo publicado: descripción (PUT, con respaldo a POST) y stock (PUT), y nada más se escribe', async () => {
+  const { default: worker } = await import('./worker.js');
+  const llamadas = [];
+  const cuerpos = [];
+  let descripcionExiste = true;
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    llamadas.push(`${init.method || 'GET'} ${ruta}`);
+    if (init.body) cuerpos.push(JSON.parse(init.body));
+    const r = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (init.method === 'PUT' && ruta.startsWith('/items/MLA123456/description')) return descripcionExiste ? r(200, {}) : r(404, { message: 'no tiene' });
+    if (init.method === 'POST' && ruta === '/items/MLA123456/description') return r(201, {});
+    if (init.method === 'PUT' && ruta === '/items/MLA123456') return r(200, { id: 'MLA123456', status: 'active', price: 1000, available_quantity: cuerpos.at(-1).available_quantity });
+    return r(404, { message: `ruta no simulada: ${init.method || 'GET'} ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 1, vence: Date.now() + 3600e3 }));
+    const env = { KV: kv, APP_SECRET: 'secreto' };
+    const llamar = async (cuerpo, id = 'MLA123456') => {
+      const res = await worker.fetch(new Request(`https://w.test/api/publicaciones/${id}`, { method: 'POST', body: JSON.stringify(cuerpo),
+        headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto', 'content-type': 'application/json' } }), env);
+      return { status: res.status, ...(await res.json()) };
+    };
+
+    // stock
+    let r = await llamar({ accion: 'stock', stock: 7 });
+    assert.equal(r.status, 200);
+    assert.equal(r.cantidad, 7);
+    assert.deepEqual(cuerpos.at(-1), { available_quantity: 7 });
+    assert.ok(llamadas.includes('PUT /items/MLA123456'));
+    for (const malo of [0, -1, 1.5, 'x', undefined]) {
+      const antes = llamadas.length;
+      r = await llamar({ accion: 'stock', stock: malo });
+      assert.equal(r.status, 400, `stock ${String(malo)}`);
+      assert.equal(llamadas.length, antes, 'un stock inválido no llama a MercadoLibre');
+    }
+
+    // descripción: existente → PUT; sin descripción previa (404) → POST; vacía → 400 sin llamar
+    r = await llamar({ accion: 'descripcion', descripcion: 'Nueva <b>descripción</b> 😀' });
+    assert.equal(r.status, 200);
+    assert.equal(r.descripcion, 'Nueva descripción');
+    assert.deepEqual(cuerpos.at(-1), { plain_text: 'Nueva descripción' });
+    assert.ok(llamadas.includes('PUT /items/MLA123456/description?api_version=2'));
+    assert.ok(!llamadas.includes('POST /items/MLA123456/description'));
+    descripcionExiste = false;
+    r = await llamar({ accion: 'descripcion', descripcion: 'Primera descripción' });
+    assert.equal(r.status, 200);
+    assert.ok(llamadas.includes('POST /items/MLA123456/description'));
+    const antes = llamadas.length;
+    r = await llamar({ accion: 'descripcion', descripcion: '   ' });
+    assert.equal(r.status, 400);
+    assert.match(r.error, /Escribí la descripción/);
+    assert.equal(llamadas.length, antes);
+
+    // lo que ya existía sigue igual (precio) y no hay otras escrituras
+    r = await llamar({ accion: 'precio', precio: 1000 });
+    assert.equal(r.status, 200);
+    assert.equal(r.precio, 1000);
+    assert.ok(llamadas.filter(l => !l.startsWith('GET')).every(l => /^(PUT|POST) \/items\/MLA123456(\/description.*)?$/.test(l)), llamadas.join(' | '));
   } finally {
     globalThis.fetch = fetchOriginal;
   }

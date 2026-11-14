@@ -56,6 +56,14 @@ Cada análisis es un registro guardado en el KV del Worker (`reg:<id>`, con foto
 - **Modo demo**: http://localhost:5610/?demo=1 recorre toda la pantalla con respuestas de mentira, sin Worker, sin gastar en la API y sin publicar.
 - Tests: `node worker/test.mjs`.
 
+## Antes de la primera publicación real (checklist)
+
+1. **Validar todo de una vez**, contra la cuenta real y sin publicar nada (el lote solo sube una foto de prueba):
+   `$env:VENDELOYA_CLAVE = [Net.NetworkCredential]::new('', (Read-Host "Clave de la app" -AsSecureString)).Password` y después `node "W:\Working Folder Personal\Apps\VendeloYa	oolsalidar-todo.mjs"` (con `--sin-lote` se saltea la foto). Tiene que dar el lote en "8 de 8 validados" y ningún paso para revisar. Si "condicionales" da 404 o 405, ML no ofrece ese endpoint: no aporta y se puede sacar.
+2. **Probar el escáner en el celular** (Chrome): armar un borrador, abrir "Más datos" y tocar "Escanear con la cámara" frente a un código de barras.
+3. **Armar un producto real hasta la confirmación**: fotos, "Armar la publicación", completar lo que falta y tocar Publicar. Si es ropa o calzado, cargar los talles (y colores) en la tabla. En la ventana de confirmación leer el detalle y, si todavía no querés publicar, tocar **No**.
+4. **Publicar** recién cuando la confirmación muestra lo que querés (título, precio, envío, una línea por variante). Después, desde el panel de la publicada se ajustan precio, stock y descripción.
+
 ## Pendientes
 
 - **Catálogo**: las categorías con catálogo obligatorio (celulares, electrónica de marca) quedan fuera del MVP. Ahí hay que buscar el producto en `/products/search` y publicar con `catalog_product_id`, y ese endpoint da 403 sin permisos especiales.

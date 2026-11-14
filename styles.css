@@ -81,11 +81,8 @@ body {
 }
 .marca { display: flex; align-items: center; gap: 8px; color: inherit; text-decoration: none; }
 .marca img { display: block; border-radius: 9px; }
-.nombre-marca { font-size: 1.3rem; font-weight: 800; letter-spacing: -.02em; }
-.nombre-marca b {
-  margin-left: 2px; padding: 0 6px; border-radius: 6px;
-  background: var(--azul); color: #fff; font-weight: 800;
-}
+.nombre-marca { font-size: 1.3rem; font-weight: 400; letter-spacing: -.02em; }
+.nombre-marca b { font-weight: 800; font-style: italic; }
 
 .chip {
   max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VendeloYa · ronda 7</title>
+<style>
+  :root { --fondo:#f2f2f2; --tarjeta:#fff; --texto:#1b1b1b; --suave:#666; --borde:#ddd; --ok:#1e8e3e; --aviso:#b26a00; }
+  @media (prefers-color-scheme: dark) { :root { --fondo:#121212; --tarjeta:#1e1e1e; --texto:#eee; --suave:#a0a0a0; --borde:#333; --ok:#5bd17d; --aviso:#f0b050; } }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--fondo); color:var(--texto); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 8px 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  p, li { margin: 4px 0; }
+  .tarjeta { background:var(--tarjeta); border:1px solid var(--borde); border-radius:12px; padding:14px 16px; margin:12px 0; }
+  .sub { color:var(--suave); margin:0 0 8px; }
+  .num { font-size: 1.6rem; font-weight: 700; color: var(--ok); }
+  .fila { display:flex; gap:12px; flex-wrap:wrap; }
+  .fila > div { flex:1 1 130px; }
+  .aviso { color: var(--aviso); font-weight: 600; }
+  code { background: var(--fondo); padding: 1px 6px; border-radius: 6px; font-size: .88em; word-break: break-word; }
+  ul { padding-left: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>VendeloYa · ronda 7</h1>
+  <p class="sub">14/11/2026 · cola persistente, colores con fotos, condicionales y escáner · 11 de 11 ítems en 11 iteraciones (presupuesto 40)</p>
+
+  <div class="tarjeta">
+    <h2>Resultado</h2>
+    <div class="fila">
+      <div><div class="num">92</div><div class="sub">tests en verde</div></div>
+      <div><div class="num">41</div><div class="sub">mutantes revisados, todos muertos</div></div>
+      <div><div class="num">0</div><div class="sub">errores propios en consola</div></div>
+    </div>
+    <p>Desplegado: API <code>10b1d958</code> y app <code>df9b3ef9</code> (commit <code>f89153e</code>). No se tocó nada real en MercadoLibre.</p>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Qué cambió</h2>
+    <ul>
+      <li><b>Cola persistente:</b> "Varios productos a la vez" sobrevive a cerrar o recargar la pestaña (se guarda en el dispositivo). Lo que estaba armándose vuelve a pendiente y lo ya armado queda como borrador.</li>
+      <li><b>Colores con fotos:</b> cada fila de la tabla trae talle y/o color, cantidad, precio y las fotos que usa. Sale una publicación por talle y color. Con ＋ sumás otro color del mismo talle.</li>
+      <li><b>Datos condicionales:</b> la app avisa qué más va a pedir MercadoLibre según lo que cargaste (no frena el Publicar).</li>
+      <li><b>Escáner:</b> botón "Escanear con la cámara" en el código de barras; vale con dos lecturas seguidas y dígito de control correcto.</li>
+    </ul>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Cómo probarlo</h2>
+    <p>Demo local: <code>?demo&amp;moda</code> (talle y color), <code>?demo&amp;color</code> (solo color) y <code>?demo</code> (condicionales: con Potencia cargada pide Peso).</p>
+    <p>Servidor: <code>py -3 -m http.server 5610 --directory "W:\Working Folder Personal\Apps\VendeloYa"</code></p>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Cómo deshacerlo</h2>
+    <p>Todo está en un commit (<code>f89153e</code>) de <code>fnguerrero/vendeloya</code>: <code>git revert f89153e</code> y volver a desplegar. Sin filas en la tabla ni código escaneado, el camino de un solo talle sigue igual.</p>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Desvíos y lo que queda</h2>
+    <ul>
+      <li class="aviso">Condicionales: la documentación de ML no confirma ese endpoint. Quedó defensivo y se apaga solo con 404/405. Para saber si existe: <code>node tools/probar-condicionales.mjs</code> (pide la clave).</li>
+      <li class="aviso">Escáner: probado con cámara simulada; falta un celular real con Chrome. En escritorio Windows suele no existir <code>BarcodeDetector</code>: avisa y se escribe a mano.</li>
+      <li>Colores y cola: sin prueba contra la cuenta real (no se publicó nada).</li>
+      <li>Fuera: seguimiento de más de 30 ítems y editar el título.</li>
+    </ul>
+  </div>
+</main>
+</body>
+</html>

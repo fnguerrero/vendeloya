@@ -10,4 +10,4 @@
 - [x] 8. Escáner: `gtinFront` en el bloque compartido y tests contra `gtinValido` · verif: tests (criterio 8, parte pura)
 - [x] 9. Escáner: botón, diálogo con cámara, lectura confirmada en 2 cuadros, apagado, mensaje sin soporte · verif: `?demo` con `BarcodeDetector` y `getUserMedia` simulados (criterio 8)
 - [x] 10. Mutantes de todo lo nuevo · verif: todos mueren (criterio 9)
-- [ ] 11. Cierre: versiones, README/NOTAS-API, consola, 375 px, tests, `--seco`, commit, push, intento de deploy, INFORME y REVISION.html · verif: criterio 10
+- [x] 11. Cierre: versiones, README/NOTAS-API, consola, 375 px, tests, `--seco`, commit, push, intento de deploy, INFORME y REVISION.html · verif: criterio 10

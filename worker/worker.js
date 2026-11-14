@@ -30,7 +30,9 @@
 
 import { identificar, completarAtributos, responderPregunta as borradorConIA } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES, requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia, validarDescripcion, limpiarTalles, conTalle } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES, requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia, validarDescripcion, limpiarTalles, conTalle, itemsDeRegistro, juntarSeguimiento } from './logica.js';
+
+const MAX_ITEMS_VISITAS = 30;
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -313,7 +315,7 @@ async function seguimiento(env, forzar = false) {
     if (cache) return { ...cache, cache: true };
   }
   const pubs = await registros.publicadas(env);
-  const ids = pubs.map(p => p.mlId);
+  const ids = [...new Set(pubs.flatMap(p => itemsDeRegistro(p).map(i => i.id)))];   // un ítem por talle
   const consultado = new Date().toISOString();
   if (!ids.length) return { registros: {}, consultado };
 
@@ -330,7 +332,8 @@ async function seguimiento(env, forzar = false) {
     // Con la cuenta real (12/11/2026) ML contestó 400 "maximum amount of items to query is 1": /visits/items
     // admite UN ítem por llamada. Si falla, se prueba el total de los últimos 90 días de ese ítem.
     const intentos = [];
-    for (const lote of lotes(ids, 1)) {
+    // Un pedido por ítem (y hasta dos): con varios talles se acota para no pasar el límite de pedidos de un Worker.
+    for (const lote of lotes(ids.slice(0, MAX_ITEMS_VISITAS), 1)) {
       const id1 = encodeURIComponent(lote[0]);
       const vias = [['visits/items', `/visits/items?ids=${id1}`],
                     ['visits/time_window', `/items/${id1}/visits/time_window?last=90&unit=day`]];
@@ -357,7 +360,7 @@ async function seguimiento(env, forzar = false) {
 
   const porItem = armarSeguimiento(items, visitas, preguntas);
   const resultado = {
-    registros: Object.fromEntries(pubs.filter(p => porItem[p.mlId]).map(p => [p.id, { ...porItem[p.mlId], mlId: p.mlId }])),
+    registros: juntarSeguimiento(pubs, porItem),
     consultado,
     diagnostico
   };
@@ -384,7 +387,7 @@ async function preguntasSinResponder(env) {
 /** Preguntas sin responder, cada una con el registro de la app al que pertenece (si lo hay). */
 async function preguntas(env) {
   const pubs = await registros.publicadas(env);
-  const porMl = new Map(pubs.map(p => [p.mlId, p.id]));
+  const porMl = new Map(pubs.flatMap(p => itemsDeRegistro(p).map(i => [i.id, p.id])));   // cualquier talle lleva a su registro
   const titulos = new Map((await registros.listar(env)).registros.map(r => [r.id, r.titulo]));
   const { preguntas: lista } = await preguntasSinResponder(env);
   return {

@@ -358,8 +358,16 @@ export function resumenRegistro(reg) {
     estado: reg.estado || 'borrador',
     thumb: reg.thumb || '',
     permalink: reg.ml?.permalink || '',
-    mlId: reg.ml?.id || null
+    mlId: reg.ml?.id || null,
+    // Varios talles: un ítem de ML por talle. Solo se guarda cuando hay más de uno (los índices viejos no lo traen).
+    ...(reg.ml?.items?.length > 1 ? { mlItems: reg.ml.items.filter(i => i?.id).map(i => ({ talle: i.talle ?? null, id: i.id })) } : {})
   };
+}
+
+/** Los ítems de ML de una publicada: uno por talle, o el único de siempre. */
+export function itemsDeRegistro(pub) {
+  if (pub?.mlItems?.length > 1) return pub.mlItems;
+  return pub?.mlId ? [{ talle: null, id: pub.mlId }] : [];
 }
 
 /* ---------- seguimiento de publicaciones ---------- */
@@ -425,6 +433,33 @@ export function armarSeguimiento(items, visitas = {}, preguntas = []) {
   }
   for (const q of preguntas || []) if (porItem[q?.item_id]) porItem[q.item_id].preguntas++;
   return porItem;
+}
+
+const suma = (xs) => (xs.every(x => x == null) ? null : xs.reduce((t, x) => t + (x || 0), 0));
+const PRIORIDAD_ESTADO = ['activa', 'pausada', 'en_revision', 'vendida', 'finalizada'];
+
+/**
+ * El seguimiento por registro de la app. Un registro de un solo ítem queda igual que siempre; uno con varios talles
+ * suma vendidas, disponibles, visitas y preguntas, toma el estado "más vivo" (activa antes que pausada, etc.), el
+ * precio y el mlId del primero, y trae el detalle de cada talle en `talles`.
+ */
+export function juntarSeguimiento(pubs, porItem) {
+  const registros = {};
+  for (const pub of pubs) {
+    const lista = itemsDeRegistro(pub).filter(i => porItem[i.id]);
+    if (!lista.length || !porItem[pub.mlId]) continue;   // el principal (el primero) manda: sin él no hay fila, como antes
+    if (itemsDeRegistro(pub).length === 1) { registros[pub.id] = { ...porItem[pub.mlId], mlId: pub.mlId }; continue; }
+    const filas = lista.map(i => ({ talle: i.talle, id: i.id, ...porItem[i.id] }));
+    const estados = filas.map(f => f.estado);
+    const estado = PRIORIDAD_ESTADO.find(e => estados.includes(e)) || estados[0];
+    registros[pub.id] = {
+      estado, mlId: pub.mlId, precio: porItem[pub.mlId].precio,
+      vendidas: suma(filas.map(f => f.vendidas)), disponibles: suma(filas.map(f => f.disponibles)),
+      visitas: suma(filas.map(f => f.visitas)), preguntas: suma(filas.map(f => f.preguntas)),
+      talles: filas
+    };
+  }
+  return registros;
 }
 
 /* ---------- acciones sobre una publicación ---------- */

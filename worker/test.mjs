@@ -12,7 +12,7 @@ import {
   leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete,
   huellaItem, paraHuella, marcarValidado, estaValidado, gastarValidacion, leerVisitas,
   requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia,
-  validarDescripcion, limpiarTalles, conTalle, MAX_TALLES
+  validarDescripcion, limpiarTalles, conTalle, MAX_TALLES, itemsDeRegistro, juntarSeguimiento
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -1472,6 +1472,139 @@ await testA('Worker: editar lo publicado: descripción (PUT, con respaldo a POST
     assert.equal(r.status, 200);
     assert.equal(r.precio, 1000);
     assert.ok(llamadas.filter(l => !l.startsWith('GET')).every(l => /^(PUT|POST) \/items\/MLA123456(\/description.*)?$/.test(l)), llamadas.join(' | '));
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+});
+
+/* ---------- seguimiento de todos los talles ---------- */
+
+test('resumenRegistro / itemsDeRegistro: con varios talles guarda un ítem por talle; con uno solo queda como siempre', () => {
+  const uno = resumenRegistro({ id: 'a', estado: 'publicada', ml: { id: 'MLA1', permalink: 'p', items: [{ talle: '40', id: 'MLA1' }] } });
+  assert.equal('mlItems' in uno, false, 'un solo ítem no agrega mlItems');
+  assert.deepEqual(itemsDeRegistro(uno), [{ talle: null, id: 'MLA1' }]);
+  const varios = resumenRegistro({ id: 'b', estado: 'publicada', ml: { id: 'MLA2', items: [{ talle: '40', id: 'MLA2', permalink: 'x' }, { talle: '41', id: 'MLA3' }, { talle: '42' }] } });
+  assert.deepEqual(varios.mlItems, [{ talle: '40', id: 'MLA2' }, { talle: '41', id: 'MLA3' }], 'sin id no cuenta');
+  assert.deepEqual(itemsDeRegistro(varios), varios.mlItems);
+  assert.deepEqual(itemsDeRegistro({ id: 'c', mlId: null }), []);
+  assert.deepEqual(itemsDeRegistro(undefined), []);
+});
+
+test('juntarSeguimiento: un ítem queda igual; varios suman, toman el estado más vivo, el precio del primero y traen cada talle', () => {
+  const porItem = {
+    MLA1: { estado: 'activa', vendidas: 1, disponibles: 2, precio: 100, visitas: 5, preguntas: 0 },
+    MLA2: { estado: 'vendida', vendidas: 3, disponibles: 0, precio: 900, visitas: 10, preguntas: 1 },
+    MLA3: { estado: 'pausada', vendidas: 0, disponibles: 4, precio: 950, visitas: null, preguntas: 2 },
+    MLA4: { estado: 'finalizada', vendidas: 0, disponibles: 0, precio: 50, visitas: 1, preguntas: 0 }
+  };
+  const r = juntarSeguimiento([
+    { id: 'a', mlId: 'MLA1', mlItems: null },
+    { id: 'b', mlId: 'MLA2', mlItems: [{ talle: '40', id: 'MLA2' }, { talle: '41', id: 'MLA3' }] },
+    { id: 'c', mlId: 'MLA9', mlItems: null },                                    // sin datos de ML: sin fila, como antes
+    { id: 'd', mlId: 'MLA4', mlItems: [{ talle: 'S', id: 'MLA4' }, { talle: 'M', id: 'MLA8' }] }   // un talle sin datos
+  ], porItem);
+  assert.deepEqual(r.a, { ...porItem.MLA1, mlId: 'MLA1' }, 'un ítem: exactamente como siempre, sin talles');
+  assert.equal(r.c, undefined);
+  assert.equal(r.b.estado, 'pausada', 'pausada gana a vendida: todavía hay un talle a la venta');
+  assert.equal(r.b.vendidas, 3);
+  assert.equal(r.b.disponibles, 4);
+  assert.equal(r.b.visitas, 10, 'null cuenta como 0 si hay otro número');
+  assert.equal(r.b.preguntas, 3);
+  assert.equal(r.b.precio, 900);
+  assert.equal(r.b.mlId, 'MLA2');
+  assert.deepEqual(r.b.talles.map(t => [t.talle, t.id, t.estado, t.disponibles]), [['40', 'MLA2', 'vendida', 0], ['41', 'MLA3', 'pausada', 4]]);
+  assert.deepEqual(r.d.talles.map(t => t.talle), ['S'], 'el talle sin datos no aparece');
+  // todos cerrados: vendida antes que finalizada; todo en null queda en null
+  const cerr = juntarSeguimiento([{ id: 'x', mlId: 'A1', mlItems: [{ talle: '1', id: 'A1' }, { talle: '2', id: 'A2' }] }],
+    { A1: { estado: 'finalizada', vendidas: 0, disponibles: null, precio: 1, visitas: null, preguntas: null }, A2: { estado: 'vendida', vendidas: 1, disponibles: null, precio: 1, visitas: null, preguntas: null } });
+  assert.equal(cerr.x.estado, 'vendida');
+  assert.equal(cerr.x.disponibles, null);
+  assert.equal(cerr.x.visitas, null);
+  assert.equal(cerr.x.preguntas, null);
+});
+
+await testA('Worker: el seguimiento y las preguntas cubren cada talle y no pasan de 30 ítems con visitas', async () => {
+  const { default: worker } = await import('./worker.js');
+  const llamadas = [];
+  const fetchOriginal = globalThis.fetch;
+  const muchos = Array.from({ length: 12 }, (_, i) => ({ talle: String(36 + i), id: `MLA5${String(i).padStart(2, '0')}` }));
+  const todos = ['MLA1', 'MLA2', 'MLA3', ...muchos.map(m => m.id)];
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    llamadas.push(`${init.method || 'GET'} ${ruta}`);
+    const r = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (ruta === '/users/me') return r(200, { id: 77, nickname: 'prueba' });
+    if (ruta.startsWith('/items?ids=')) return r(200, ruta.split('ids=')[1].split('&')[0].split(',').map(id => ({ code: 200, body:
+      { id, status: id === 'MLA3' ? 'paused' : 'active', sold_quantity: id === 'MLA2' ? 2 : 0, available_quantity: 3, price: 1000 } })));
+    if (ruta.startsWith('/visits/items')) { const id = ruta.split('ids=')[1]; return r(200, { [id]: 4 }); }
+    if (ruta.startsWith('/my/received_questions/search')) return r(200, { questions: [{ id: 10, item_id: 'MLA3', text: '¿Tenés el 41?', date_created: 'x' }, { id: 11, item_id: 'MLA1', text: 'Hola', date_created: 'y' }] });
+    return r(404, { message: `ruta no simulada: ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 77, vence: Date.now() + 3600e3 }));
+    const indice = [
+      { id: 'a', estado: 'publicada', mlId: 'MLA1', titulo: 'Uno', actualizado: '2026-11-14T10:00:00Z' },
+      { id: 'b', estado: 'publicada', mlId: 'MLA2', titulo: 'Zapas', actualizado: '2026-11-14T11:00:00Z', mlItems: [{ talle: '40', id: 'MLA2' }, { talle: '41', id: 'MLA3' }] },
+      { id: 'c', estado: 'publicada', mlId: muchos[0].id, titulo: 'Doce talles', actualizado: '2026-11-14T12:00:00Z', mlItems: muchos }
+    ];
+    await kv.put('regs', JSON.stringify(indice));
+    const env = { KV: kv, APP_SECRET: 'secreto' };
+    const pedir = async ruta => {
+      const res = await worker.fetch(new Request(`https://w.test${ruta}`, { method: 'GET', headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto' } }), env);
+      return { status: res.status, ...(await res.json()) };
+    };
+
+    const s = await pedir('/api/seguimiento?forzar=1');
+    assert.equal(s.status, 200);
+    assert.equal(s.registros.a.mlId, 'MLA1');
+    assert.equal(s.registros.a.talles, undefined, 'el de un ítem no cambia');
+    assert.equal(s.registros.b.estado, 'activa');
+    assert.equal(s.registros.b.vendidas, 2);
+    assert.equal(s.registros.b.disponibles, 6);
+    assert.equal(s.registros.b.visitas, 8);
+    assert.equal(s.registros.b.preguntas, 1, 'la pregunta del talle 41 cuenta en su registro');
+    assert.deepEqual(s.registros.b.talles.map(t => [t.talle, t.estado]), [['40', 'activa'], ['41', 'pausada']]);
+    assert.equal(s.registros.c.talles.length, 12);
+    // se consultaron los ítems de todos los talles (una sola vez cada uno) y las visitas no pasan de 30
+    const idsPedidos = llamadas.filter(l => l.startsWith('GET /items?ids=')).flatMap(l => l.split('ids=')[1].split('&')[0].split(','));
+    assert.deepEqual([...new Set(idsPedidos)].sort(), [...todos].sort());
+    assert.equal(idsPedidos.length, todos.length);
+    const visitasPedidas = llamadas.filter(l => l.startsWith('GET /visits/items'));
+    assert.equal(visitasPedidas.length, todos.length, `${todos.length} ítems < 30: todos tienen visitas`);
+
+    // las preguntas llevan al registro del talle, sea cual sea
+    const p = await pedir('/api/preguntas');
+    assert.equal(p.status, 200);
+    assert.equal(p.preguntas.find(q => q.mlId === 'MLA3').registroId, 'b');
+    assert.equal(p.preguntas.find(q => q.mlId === 'MLA1').registroId, 'a');
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+});
+
+await testA('Worker: con más de 30 ítems publicados, las visitas se piden solo para los primeros 30 (límite de pedidos)', async () => {
+  const { default: worker } = await import('./worker.js');
+  const visitas = [];
+  const fetchOriginal = globalThis.fetch;
+  const ids = Array.from({ length: 40 }, (_, i) => `MLA7${String(i).padStart(2, '0')}`);
+  globalThis.fetch = async (url) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    const r = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (ruta === '/users/me') return r(200, { id: 77, nickname: 'prueba' });
+    if (ruta.startsWith('/items?ids=')) return r(200, ruta.split('ids=')[1].split('&')[0].split(',').map(id => ({ code: 200, body: { id, status: 'active', sold_quantity: 0, available_quantity: 1, price: 1 } })));
+    if (ruta.startsWith('/visits/items')) { visitas.push(ruta); return r(200, { [ruta.split('ids=')[1]]: 1 }); }
+    if (ruta.startsWith('/my/received_questions/search')) return r(200, { questions: [] });
+    return r(404, { message: `ruta no simulada: ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 77, vence: Date.now() + 3600e3 }));
+    await kv.put('regs', JSON.stringify([{ id: 'z', estado: 'publicada', mlId: ids[0], titulo: 'Muchos', actualizado: '2026-11-14T12:00:00Z', mlItems: ids.slice(0, 12).map((id, i) => ({ talle: String(i), id })) },
+      ...ids.slice(12).map((id, i) => ({ id: `r${i}`, estado: 'publicada', mlId: id, titulo: `P${i}`, actualizado: '2026-11-14T10:00:00Z' }))]));
+    const res = await worker.fetch(new Request('https://w.test/api/seguimiento?forzar=1', { headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto' } }), { KV: kv, APP_SECRET: 'secreto' });
+    assert.equal(res.status, 200);
+    assert.equal(visitas.length, 30);
   } finally {
     globalThis.fetch = fetchOriginal;
   }

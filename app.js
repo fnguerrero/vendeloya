@@ -1885,7 +1885,7 @@ $('listo-historial').addEventListener('click', () => {
 
 /* ---------- una publicación: precio, estado y preguntas ---------- */
 
-const pub = { reg: null, seg: null, preguntas: [], ficha: null };
+const pub = { reg: null, seg: null, preguntas: [], ficha: null, items: [] };
 
 async function abrirPublicacion(r) {
   pub.reg = r;
@@ -1895,10 +1895,13 @@ async function abrirPublicacion(r) {
   $('pub-ver').hidden = !r.permalink;
   $('pub-copiar').hidden = !r.permalink;
   $('pub-precio').value = miles(pub.seg?.precio || r.precio);
-  $('pub-stock').value = pub.seg?.disponibles ? String(pub.seg.disponibles) : '';
+  // El stock del panel es el del primer ítem (el que se edita acá), no la suma de los talles.
+  const primero = pub.seg?.talles?.[0] || pub.seg;
+  $('pub-stock').value = primero?.disponibles ? String(primero.disponibles) : '';
   $('pub-descripcion').value = '';
   $('pub-talles-caja').hidden = true;
   pub.ficha = null;
+  pub.items = [];
   pintarPublicacion();
   $('pub').showModal();
   cargarFichaDe(r.id);
@@ -1912,10 +1915,14 @@ async function cargarFichaDe(registroId) {
     if (pub.reg?.id !== registroId) return;   // mientras tanto abrieron otra
     pub.ficha = reg;
     $('pub-descripcion').value = reg.publicacion?.descripcion || '';
-    const items = reg.ml?.items || [];
-    dibujarTalles($('pub-talles'), items);
-    $('pub-talles-caja').hidden = items.length < 2;
+    pub.items = reg.ml?.items || [];
+    pintarTallesDelPanel();
   } catch { /* sin la ficha igual se puede cambiar precio, estado y stock */ }
+}
+
+function pintarTallesDelPanel() {
+  dibujarTalles($('pub-talles'), pub.items, pub.seg?.talles || []);
+  $('pub-talles-caja').hidden = pub.items.length < 2;
 }
 
 function pintarPublicacion() {
@@ -1924,7 +1931,8 @@ function pintarPublicacion() {
   $('pub-resumen').textContent = [
     ESTADOS[est] || est,
     s?.visitas != null ? `${s.visitas} ${s.visitas === 1 ? 'visita' : 'visitas'}` : '',
-    s?.vendidas ? `${s.vendidas} ${s.vendidas === 1 ? 'vendida' : 'vendidas'}` : ''
+    s?.vendidas ? `${s.vendidas} ${s.vendidas === 1 ? 'vendida' : 'vendidas'}` : '',
+    s?.talles?.length > 1 ? `${s.talles.length} talles` : ''
   ].filter(Boolean).join(' · ');
   const cerrada = est === 'vendida' || est === 'finalizada';
   $('pub-pausar').hidden = !(est === 'activa' || est === 'publicada' || est === 'en_revision');
@@ -1951,6 +1959,12 @@ async function accionPublicacion(accion, datos = {}) {
         try { await api(`/api/registros/${r.id}`, { publicacion: { ...pub.ficha.publicacion, descripcion: res.descripcion } }, 'PUT'); pub.ficha.publicacion.descripcion = res.descripcion; }
         catch { /* ya está en MercadoLibre; solo el borrador local queda con la anterior */ }
       }
+    } else if (pub.seg?.talles) {
+      // Varios talles: la acción fue sobre el primero y los totales y el estado son de todos, así que se vuelven a pedir.
+      if (accion === 'stock' && res.cantidad != null) $('pub-stock').value = String(res.cantidad);
+      await cargarSeguimiento(historialVista.registros, true);
+      pub.seg = historialVista.seguimiento[r.id] || pub.seg;
+      pintarTallesDelPanel();
     } else {
       pub.seg = { ...(pub.seg || {}), mlId, estado: res.estado, precio: res.precio ?? pub.seg?.precio ?? null,
         ...(res.cantidad != null ? { disponibles: res.cantidad } : {}) };
@@ -2211,14 +2225,17 @@ $('publicar').addEventListener('click', async () => {
 $('confirmar-no').addEventListener('click', () => $('confirmar').close());
 
 /** Los links de cada talle publicado (o nada si fue una sola). */
-function dibujarTalles(lista, items = []) {
+function dibujarTalles(lista, items = [], detalle = []) {
   const varios = items.length > 1;
   lista.hidden = !varios;
   lista.replaceChildren(...(varios ? items : []).map(i => {
     const li = document.createElement('li');
     const a = document.createElement('a');
     a.href = i.permalink || '#'; a.target = '_blank'; a.rel = 'noopener';
-    a.textContent = `Talle ${i.talle || '?'}${i.id ? ` · ${i.id}` : ''}`;
+    // Con el seguimiento a mano, cada talle dice cómo va: estado, unidades que quedan, vendidas y visitas.
+    const d = detalle.find(x => x.id === i.id);
+    const datos = d ? [ESTADOS[d.estado] || d.estado, d.disponibles != null ? `${d.disponibles} u.` : '', d.vendidas ? `${d.vendidas} vend.` : '', d.visitas != null ? `${d.visitas} vis.` : ''].filter(Boolean).join(' · ') : '';
+    a.textContent = `Talle ${i.talle || '?'}${datos ? ` · ${datos}` : i.id ? ` · ${i.id}` : ''}`;
     li.append(a);
     return li;
   }));
@@ -2417,8 +2434,16 @@ async function apiDemo(ruta, cuerpo, metodo) {
       const base = i % 3 === 2 ? { estado: 'vendida', vendidas: 1, disponibles: 0, visitas: 40 + i * 7 }
                                : { estado: 'activa', vendidas: 0, disponibles: 1, visitas: 12 + i * 7 };
       const a = extra.acciones[r.ml?.id] || {};
-      return [r.id, { ...base, ...(a.estado ? { estado: a.estado } : {}), ...(a.cantidad ? { disponibles: a.cantidad } : {}), precio: a.precio ?? null, mlId: r.ml?.id,
-        preguntas: extra.preguntas.filter(q => q.registroId === r.id).length }];
+      const primero = { ...base, ...(a.estado ? { estado: a.estado } : {}), ...(a.cantidad ? { disponibles: a.cantidad } : {}) };
+      const preguntas = extra.preguntas.filter(q => q.registroId === r.id).length;
+      // Varios talles: el primero es el de las acciones; los demás andan solos. Suma y estado "más vivo", como el Worker.
+      if (r.ml?.items?.length > 1) {
+        const talles = r.ml.items.map((it, k) => ({ talle: it.talle, id: it.id, ...(k === 0 ? primero : { estado: 'activa', vendidas: k === 1 ? 1 : 0, disponibles: 2, visitas: 5 + k }) }));
+        const estado = ['activa', 'pausada', 'vendida'].find(e => talles.some(t => t.estado === e)) || talles[0].estado;
+        return [r.id, { estado, vendidas: talles.reduce((s, t) => s + t.vendidas, 0), disponibles: talles.reduce((s, t) => s + t.disponibles, 0),
+          visitas: talles.reduce((s, t) => s + t.visitas, 0), precio: a.precio ?? null, mlId: r.ml.id, preguntas, talles }];
+      }
+      return [r.id, { ...primero, precio: a.precio ?? null, mlId: r.ml?.id, preguntas }];
     })) };
   }
   if (ruta === '/api/preguntas') {

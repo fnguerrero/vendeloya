@@ -61,7 +61,7 @@ export async function publicadas(env) {
     cambio = true;
   }
   if (cambio) await env.KV.put('regs', JSON.stringify(idx));
-  return idx.filter(r => r.estado === 'publicada' && r.mlId).map(r => ({ id: r.id, mlId: r.mlId }));
+  return idx.filter(r => r.estado === 'publicada' && r.mlId).map(r => ({ id: r.id, mlId: r.mlId, mlItems: r.mlItems || null }));
 }
 
 export async function borrar(env, id) {

@@ -12,7 +12,7 @@ import {
   leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete,
   huellaItem, paraHuella, marcarValidado, estaValidado, gastarValidacion, leerVisitas,
   requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia,
-  validarDescripcion, limpiarTalles, conTalle, MAX_TALLES, itemsDeRegistro, juntarSeguimiento
+  validarDescripcion, limpiarTalles, conTalle, MAX_TALLES, itemsDeRegistro, juntarSeguimiento, limpiarVariantes, conVariante
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -1472,6 +1472,89 @@ await testA('Worker: editar lo publicado: descripción (PUT, con respaldo a POST
     assert.equal(r.status, 200);
     assert.equal(r.precio, 1000);
     assert.ok(llamadas.filter(l => !l.startsWith('GET')).every(l => /^(PUT|POST) \/items\/MLA123456(\/description.*)?$/.test(l)), llamadas.join(' | '));
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+});
+
+/* ---------- variantes: talle + cantidad y precio propios ---------- */
+
+test('limpiarVariantes: talles sueltos u objetos, sin repetidos, con cantidad y precio solo si vienen', () => {
+  assert.deepEqual(limpiarVariantes('40, 41;42'), [{ talle: '40' }, { talle: '41' }, { talle: '42' }]);
+  assert.deepEqual(limpiarVariantes([{ talle: '40', cantidad: '3', precio: '28000.4' }, '41', { talle: ' 41 ', cantidad: 9 }, { talle: '42', cantidad: '', precio: null }, { talle: '' }]),
+    [{ talle: '40', cantidad: 3, precio: 28000 }, { talle: '41' }, { talle: '42' }], 'el primero de cada talle gana; vacío = común');
+  assert.deepEqual(limpiarVariantes(undefined), []);
+  for (const malo of [0, -1, 1.5, 'x', 1000000]) assert.throws(() => limpiarVariantes([{ talle: '40', cantidad: malo }]), /cantidad del talle 40/, `cantidad ${malo}`);
+  for (const malo of [0, -5, 'abc']) assert.throws(() => limpiarVariantes([{ talle: '40', precio: malo }]), /precio del talle 40/, `precio ${malo}`);
+  assert.throws(() => limpiarVariantes(Array.from({ length: MAX_TALLES + 1 }, (_, i) => ({ talle: `T${i}` }))), /máximo es 12/);
+});
+
+test('conVariante: pone talle, cantidad y precio solo si la variante los trae, y no muta la original', () => {
+  const base = { titulo: 'Zapas', cantidad: 2, precio: 30000, talles: [{ talle: '40' }], atributos: [{ id: 'SIZE', valor: '', opciones: [] }] };
+  const a = conVariante(base, { talle: '40', cantidad: 5, precio: 25000 });
+  assert.deepEqual([a.cantidad, a.precio, a.atributos[0].valor, a.talles], [5, 25000, '40', undefined]);
+  const b = conVariante(base, { talle: '41' });
+  assert.deepEqual([b.cantidad, b.precio], [2, 30000]);
+  assert.deepEqual([base.cantidad, base.precio, base.atributos[0].valor], [2, 30000, '']);
+});
+
+await testA('Worker: cada variante lleva su cantidad y su precio al ítem (revisar y publicar), y una cantidad inválida frena antes de llamar a nadie', async () => {
+  const { default: worker } = await import('./worker.js');
+  const zap = contrato.casos.find(x => x.categoria.id === 'MLA109027');
+  const llamadas = [];
+  const validados = [];
+  const creados = [];
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    llamadas.push(`${init.method || 'GET'} ${ruta}`);
+    const r = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (ruta === '/users/me') return r(200, { id: 77, nickname: 'prueba', tags: ['user_product_seller'] });
+    if (ruta === '/categories/MLA109027/attributes') return r(200, zap.atributos);
+    if (ruta === '/categories/MLA109027') return r(200, zap.categoria);
+    if (ruta.startsWith('/sites/MLA/domain_discovery/search')) return r(200, zap.discovery);
+    if (ruta === '/catalog/charts/search') return r(200, { charts: [{ id: '426238', type: 'STANDARD', names: { MLA: 'Standard' } }] });
+    if (ruta === '/catalog/charts/426238') return r(200, guiaFalsa());
+    if (ruta === '/items/validate') { validados.push(JSON.parse(init.body)); return r(200, {}); }
+    if (ruta === '/items') { creados.push(JSON.parse(init.body)); return r(201, { id: `MLA88800${creados.length}`, permalink: 'p', status: 'active' }); }
+    if (ruta.endsWith('/description')) return r(201, {});
+    return r(404, { message: `ruta no simulada: ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 77, vence: Date.now() + 3600e3 }));
+    const env = { KV: kv, APP_SECRET: 'secreto' };
+    const llamar = async (ruta, cuerpo) => {
+      const res = await worker.fetch(new Request(`https://w.test${ruta}`, { method: 'POST', body: JSON.stringify(cuerpo),
+        headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto', 'content-type': 'application/json' } }), env);
+      return { status: res.status, ...(await res.json()) };
+    };
+    const variantes = [{ talle: '40', cantidad: 3 }, { talle: '41', precio: 28000 }, '42'];
+    const cuerpo = (talles) => ({ fotos: [{ id: 'p1' }], publicacion: { titulo: 'Zapatillas running', categoria: 'MLA109027', precio: 30000, condicion: 'usado', cantidad: 2, tipoPublicacion: 'gold_special',
+      envio: 'retiro', descripcion: 'Casi nuevas', talles,
+      atributos: [{ id: 'SIZE', valor: '', opciones: [] }, { id: 'GENDER', valor: 'Hombre', opciones: [] }, { id: 'BRAND', valor: 'Adidas', opciones: [] }] } });
+    const qp = it => [it.attributes.find(a => a.id === 'SIZE').value_name, it.available_quantity, it.price];
+
+    let r = await llamar('/api/revisar', cuerpo(variantes));
+    assert.equal(r.ok, true);
+    assert.deepEqual(validados.map(qp), [['40 AR', 3, 30000], ['41 AR', 2, 28000], ['42 AR', 2, 30000]]);
+    r = await llamar('/api/publicar', cuerpo(variantes));
+    assert.equal(r.status, 200);
+    assert.deepEqual(creados.map(qp), [['40 AR', 3, 30000], ['41 AR', 2, 28000], ['42 AR', 2, 30000]]);
+    assert.deepEqual(r.items.map(i => i.talle), ['40', '41', '42']);
+
+    // si cambia la cantidad de un talle después de revisar, es otro contenido: no sale
+    creados.length = 0;
+    r = await llamar('/api/publicar', cuerpo([{ talle: '40', cantidad: 4 }, { talle: '41', precio: 28000 }, '42']));
+    assert.equal(r.status, 412);
+    assert.equal(creados.length, 0);
+
+    // cantidad inválida: 400 y no se llama a ML
+    const antes = llamadas.length;
+    r = await llamar('/api/revisar', cuerpo([{ talle: '40', cantidad: 0 }]));
+    assert.equal(r.status, 400);
+    assert.match(r.error, /cantidad del talle 40/);
+    assert.equal(llamadas.length, antes);
   } finally {
     globalThis.fetch = fetchOriginal;
   }

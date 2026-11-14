@@ -732,7 +732,7 @@ function mostrarRevision(r, guardada) {
   $('garantia').value = p.garantia || '';
   $('envio').value = p.envio ?? 'retiro';
   $('cantidad').value = p.cantidad || 1;
-  $('talles').value = (p.talles || []).join(', ');
+  dibujarVariantes(p.talles || []);
   $('costo').value = montoTexto(p.costo);
   $('costo-envio').value = montoTexto(p.costoEnvio);
   avisarMontos();
@@ -1457,7 +1457,7 @@ function pendientes() {
   const max = estado.categoria?.maxTitulo || 60;
   const titulo = $('titulo').value.trim();
   // Con varios talles el "Talle" de arriba no hace falta: cada publicación toma el suyo de la lista.
-  const conLista = talleDeLista().length > 0;
+  const conLista = variantesActuales().length > 0;
   const faltan = [...$('paso-revision').querySelectorAll('.campo.requerido [data-id]')].filter(c => !c.value.trim() && !(conLista && c.dataset.id === 'SIZE'));
   const items = [
     { ok: estado.fotos.length > 0, texto: `${estado.fotos.length || 'Sin'} foto${estado.fotos.length === 1 ? '' : 's'}` },
@@ -1466,7 +1466,8 @@ function pendientes() {
     { ok: precioActual() > 0, texto: precioActual() > 0 ? `Precio $ ${miles(precioActual())}` : 'Precio', el: $('precio') },
     { ok: !faltan.length, texto: faltan.length ? `Falta${faltan.length > 1 ? 'n' : ''} ${faltan.length} dato${faltan.length > 1 ? 's' : ''} obligatorio${faltan.length > 1 ? 's' : ''}` : 'Datos obligatorios', el: faltan[0] }
   ];
-  if (talleDeLista().length > MAX_TALLES) items.push({ ok: false, texto: `Demasiados talles (máximo ${MAX_TALLES})`, el: $('talles') });
+  if (variantesActuales().length > MAX_TALLES) items.push({ ok: false, texto: `Demasiados talles (máximo ${MAX_TALLES})`, el: $('talles-nuevo') });
+  for (const e of erroresDeVariantes()) items.push({ ok: false, ...e });
   // Mercado Envíos calcula el costo con el peso y las medidas: sin ellos no se puede publicar así.
   if ($('envio').value === 'me2') { const v = validacionPaquete(); items.push({ ok: v.ok, texto: v.ok ? 'Peso y medidas del paquete' : `Paquete: ${v.errores[0]}`, el: $('paq-peso') }); }
   // MercadoLibre rechaza los datos de contacto: se avisa antes y frena el Publicar.
@@ -1548,7 +1549,7 @@ function tocado(e) {
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
   if (['envio', 'cantidad', 'tipo'].includes(e?.target?.id)) resumirVenta();
-  if (e?.target?.id === 'talles') pintarTalles();
+  if (['cantidad', 'precio'].includes(e?.target?.id) || e?.target?.closest?.('#variantes')) pintarTalles();
   if (String(e?.target?.id || '').startsWith('paq-')) pintarPaquete();
   pintarGanancia();
   if (['precio', 'tipo'].includes(e?.target?.id)) pedirComisiones();
@@ -2110,32 +2111,103 @@ $('pub-vendida').addEventListener('click', () => {
 const MAX_TALLES = 12;
 
 /**
- * Los talles a publicar, sin vacíos ni repetidos (igual que limpiarTalles del Worker). Con la cuenta de User Products
- * MercadoLibre no admite variaciones: cada talle sale como una publicación propia.
+ * Variantes: una fila por talle, con cantidad y precio propios (vacíos = los comunes de la publicación). Con la cuenta
+ * de User Products MercadoLibre no admite variaciones: cada talle sale como una publicación propia.
  */
-function listaTalles(texto) {
+const filasDeVariantes = () => [...$('variantes').querySelectorAll('.variante')];
+
+/** Las variantes que rigen: [{ talle, cantidad?, precio? }], sin talles vacíos ni repetidos. Vacía si la categoría no tiene talle. */
+function variantesActuales() {
+  if ($('bloque-talles').hidden) return [];
   const vistos = new Set();
   const lista = [];
-  for (const t of String(texto || '').split(/[,;\n]/)) {
-    const talle = t.replace(/\s+/g, ' ').trim();
+  for (const fila of filasDeVariantes()) {
+    const talle = fila.querySelector('.v-talle').value.replace(/\s+/g, ' ').trim();
     if (!talle || vistos.has(talle.toLowerCase())) continue;
     vistos.add(talle.toLowerCase());
-    lista.push(talle);
+    const cantidad = fila.querySelector('.v-cant').value.trim();
+    const precio = fila.querySelector('.v-precio').value.replace(/\D/g, '');
+    lista.push({ talle, ...(cantidad ? { cantidad: Number(cantidad) } : {}), ...(precio ? { precio: Number(precio) } : {}) });
   }
   return lista;
 }
 
-/** La lista de talles que rige: vacía si la categoría no tiene talle. */
-const talleDeLista = () => ($('bloque-talles').hidden ? [] : listaTalles($('talles').value));
+/** Qué está mal en las filas (cantidad o precio inválidos), para frenar el Publicar antes de preguntarle a MercadoLibre. */
+function erroresDeVariantes() {
+  const errores = [];
+  for (const fila of filasDeVariantes()) {
+    const talle = fila.querySelector('.v-talle').value.trim();
+    if (!talle) continue;
+    const c = fila.querySelector('.v-cant').value.trim();
+    const p = fila.querySelector('.v-precio').value.replace(/\D/g, '');
+    if (c && !(Number.isInteger(Number(c)) && Number(c) >= 1)) errores.push({ texto: `Cantidad del talle ${talle}: 1 o más`, el: fila.querySelector('.v-cant') });
+    if (fila.querySelector('.v-precio').value.trim() && !(Number(p) > 0)) errores.push({ texto: `Precio del talle ${talle}`, el: fila.querySelector('.v-precio') });
+  }
+  return errores;
+}
+
+function agregarFila(v = {}) {
+  const fila = document.createElement('div');
+  fila.className = 'variante';
+  const campo = (clase, etiqueta, valor, extra = {}) => {
+    const i = document.createElement('input');
+    i.type = 'text'; i.className = clase; i.autocomplete = 'off'; i.value = valor ?? '';
+    i.setAttribute('aria-label', etiqueta);
+    return Object.assign(i, extra);
+  };
+  const quitar = document.createElement('button');
+  quitar.type = 'button'; quitar.className = 'icono v-quitar'; quitar.textContent = '✕';
+  quitar.setAttribute('aria-label', 'Quitar este talle');
+  quitar.onclick = () => { fila.remove(); pintarTalles(); programarGuardado(); };
+  fila.append(campo('v-talle', 'Talle', v.talle, { placeholder: 'Talle' }),
+    campo('v-cant', 'Cantidad de este talle', v.cantidad, { inputMode: 'numeric' }),
+    campo('v-precio', 'Precio de este talle', v.precio ? miles(v.precio) : '', { inputMode: 'numeric' }),
+    quitar);
+  $('variantes').append(fila);
+  return fila;
+}
+
+/** Los talles que estén en el campo de "Agregar" pasan a ser filas (acepta "40, 41, 42"). Los repetidos no se duplican. */
+function agregarDesdeCampo() {
+  const ya = new Set(variantesActuales().map(v => v.talle.toLowerCase()));
+  for (const t of $('talles-nuevo').value.split(/[,;\n]/)) {
+    const talle = t.replace(/\s+/g, ' ').trim();
+    if (!talle || ya.has(talle.toLowerCase())) continue;
+    ya.add(talle.toLowerCase());
+    agregarFila({ talle });
+  }
+  $('talles-nuevo').value = '';
+  pintarTalles();
+  programarGuardado();
+}
+
+function dibujarVariantes(lista = []) {
+  $('variantes').replaceChildren();
+  for (const v of lista) agregarFila(typeof v === 'string' ? { talle: v } : v);
+  pintarTalles();
+}
 
 function pintarTalles() {
-  const lista = talleDeLista();
+  const lista = variantesActuales();
+  // Lo que se deja vacío en una fila usa lo común: se muestra como pista.
+  for (const fila of filasDeVariantes()) {
+    fila.querySelector('.v-cant').placeholder = `Cant. ${$('cantidad').value || 1}`;
+    fila.querySelector('.v-precio').placeholder = precioActual() ? `$ ${miles(precioActual())}` : '$ precio';
+  }
   const ayuda = $('talles-ayuda');
   ayuda.classList.toggle('error-campo', lista.length > MAX_TALLES);
   if (lista.length > MAX_TALLES) ayuda.textContent = `Son demasiados: el máximo es ${MAX_TALLES} talles por publicación.`;
-  else if (!lista.length) ayuda.textContent = 'Opcional. Si lo dejás vacío se publica un solo talle, el de “Talle” más arriba. Con varios, cada talle sale como una publicación propia.';
-  else ayuda.textContent = `${lista.length} ${lista.length > 1 ? 'publicaciones' : 'publicación'}, una por talle (${lista.join(', ')}). La cantidad es por talle.`;
+  else if (!lista.length) ayuda.textContent = 'Opcional. Sin talles acá se publica uno solo, el de “Talle” más arriba. Con varios, cada talle sale como una publicación propia, con su cantidad y su precio (vacío = los de arriba).';
+  else ayuda.textContent = `${lista.length} ${lista.length > 1 ? 'publicaciones' : 'publicación'}, una por talle. Lo que dejes vacío usa la cantidad y el precio de arriba.`;
 }
+
+$('variantes').addEventListener('input', e => {
+  if (e.target.classList.contains('v-precio')) e.target.value = miles(String(e.target.value).replace(/\D/g, ''));
+  if (e.target.classList.contains('v-cant')) e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+});
+$('talles-agregar').addEventListener('click', agregarDesdeCampo);
+$('talles-nuevo').addEventListener('change', agregarDesdeCampo);   // al salir del campo o con Enter, para que no se pierda lo escrito
+$('talles-nuevo').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); agregarDesdeCampo(); } });
 
 function leerPublicacion() {
   const valores = new Map([...$('paso-revision').querySelectorAll('[data-id]')].map(c => [c.dataset.id, c.value.trim()]));
@@ -2146,7 +2218,7 @@ function leerPublicacion() {
     condicion: $('condicion').value,
     precio: precioActual(),
     cantidad: Number($('cantidad').value) || 1,
-    talles: talleDeLista(),
+    talles: variantesActuales(),
     tipoPublicacion: $('tipo').value,
     garantia,
     garantiaTiempo: garantia === 'Garantía del vendedor' ? '30 días' : '',
@@ -2181,6 +2253,7 @@ function guardarIdsDeFotos(ids = []) {
  * grupos de datos para encontrarlo rápido.
  */
 $('publicar').addEventListener('click', async () => {
+  if ($('talles-nuevo').value.trim()) agregarDesdeCampo();   // lo escrito en "Agregar" y no confirmado también cuenta
   // Si falta algo que la app ya sabe, se va directo a completarlo: no hace falta preguntarle a MercadoLibre.
   const { pendientes: faltan } = pendientes();
   const destino = faltan.find(i => i.el)?.el;
@@ -2215,9 +2288,10 @@ $('publicar').addEventListener('click', async () => {
   const p = leerPublicacion();
   const medidas = p.envio === 'retiro' ? null : validarPaquete(p.paquete).valores;
   const porTalle = p.talles.length > 1;
-  $('confirmar-texto').textContent = `"${p.titulo}" a ${pesos(p.precio)}, ${p.cantidad} unidad${p.cantidad > 1 ? 'es' : ''}${porTalle ? ' por talle' : ''}, ${$('tipo').selectedOptions[0]?.textContent || ''}. Envío: ${textoEnvio(p)}.`
+  const unidades = n => `${n} unidad${n > 1 ? 'es' : ''}`;
+  $('confirmar-texto').textContent = `"${p.titulo}" a ${pesos(p.precio)}${porTalle ? '' : `, ${unidades(p.cantidad)}`}, ${$('tipo').selectedOptions[0]?.textContent || ''}. Envío: ${textoEnvio(p)}.`
     + (medidas ? ` Paquete: ${medidas.pesoG.toLocaleString('es-AR')} g, ${medidas.largoCm} × ${medidas.anchoCm} × ${medidas.altoCm} cm.` : '')
-    + (porTalle ? ` Se crean ${p.talles.length} publicaciones, una por talle: ${p.talles.join(', ')}.` : '');
+    + (porTalle ? ` Se crean ${p.talles.length} publicaciones, una por talle: ${p.talles.map(v => `${v.talle} (${unidades(v.cantidad ?? p.cantidad)}${v.precio ? `, ${pesos(v.precio)}` : ''})`).join('; ')}.` : '');
   const avisoGratis = avisoEnvioGratis({ envio: p.envio, envioGratis: p.envioGratis, costoEnvio: p.costoEnvio });
   $('confirmar-avisos').replaceChildren(...[...notas, ...(avisoGratis ? [avisoGratis] : [])].map(t => { const li = document.createElement('li'); li.textContent = t; return li; }));
   $('confirmar').showModal();
@@ -2395,7 +2469,7 @@ async function apiDemo(ruta, cuerpo, metodo) {
     const sinUnidad = cuerpo.publicacion.atributos.filter(a => a.tipo === 'number_unit' && /^\d+([.,]\d+)?$/.test(String(a.valor || '').trim()));
     if (sinUnidad.length) return { ok: false, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`),
       errores: sinUnidad.map(a => `Attribute ${a.id} with value ${a.valor} is required and was omitted. The provided unit is not valid.`) };
-    const talles = cuerpo.publicacion.talles || [];
+    const talles = (cuerpo.publicacion.talles || []).map(v => v.talle ?? v);
     const falta = cuerpo.publicacion.atributos.filter(a => a.requerido && !a.valor && !(talles.length && a.id === 'SIZE')).map(a => a.nombre);
     if (!falta.length && talles.length) {
       // Como el Worker: un ítem por talle; el 99 no está en la guía de talles.
@@ -2419,7 +2493,7 @@ async function apiDemo(ruta, cuerpo, metodo) {
     return { disponible: true, precio, tipos: [t('gold_special', 'Clásica', 13), ...(sinPremium ? [] : [t('gold_pro', 'Premium', 18), t('free', 'Gratuita', 0)])] };
   }
   if (ruta === '/api/publicar') {
-    const talles = cuerpo.publicacion?.talles || [];
+    const talles = (cuerpo.publicacion?.talles || []).map(v => v.talle ?? v);
     if (!talles.length) return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
     // El 44 simula un rechazo de MercadoLibre al crear: los demás salen y se informa cuál falló.
     const items = talles.filter(t => t !== '44').map((talle, i) => ({ talle, id: `MLA-DEMO-${i + 1}`, permalink: `https://www.mercadolibre.com.ar/MLA-DEMO-${i + 1}`, estado: 'demo' }));
@@ -2501,7 +2575,7 @@ if (DEMO) {
   document.title = 'VendeloYa (demo)';
   // Ganchos para probar sin manos (solo en el demo).
   window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista, api, cargarHistorial, fotosCambiaron, lineaMedidas, armarRespaldo, aplicarTema,
-    hacerOtraIgual, abrirRegistro, cola, correrCola, sumarACola, pintarCola, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion, listaTalles, pintarTalles, abrirPublicacion, pub };
+    hacerOtraIgual, abrirRegistro, cola, correrCola, sumarACola, pintarCola, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion, variantesActuales, agregarDesdeCampo, pintarTalles, abrirPublicacion, pub };
 }
 dibujarFotos();
 refrescarCuenta();

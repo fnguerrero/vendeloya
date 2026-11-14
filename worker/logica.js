@@ -139,6 +139,48 @@ export function limpiarTalles(entrada) {
   return lista;
 }
 
+/**
+ * Las variantes a publicar: una por talle, cada una con su cantidad y su precio si difieren de los comunes.
+ * Acepta talles sueltos ("40" o "40, 41") y/o objetos { talle, cantidad?, precio? }. Sin repetidos (por talle),
+ * en orden, hasta MAX_TALLES. Cantidad: entero de 1 a 999999. Precio: número mayor a cero (se redondea).
+ * Lo que viene vacío no se incluye: esa variante usa el valor común de la publicación.
+ */
+export function limpiarVariantes(entrada) {
+  const crudo = Array.isArray(entrada) ? entrada : String(entrada ?? '').split(/[,;\n]/);
+  const vistos = new Set();
+  const lista = [];
+  for (const x of crudo) {
+    const obj = x && typeof x === 'object' ? x : { talle: x };
+    const talle = String(obj.talle ?? '').replace(/\s+/g, ' ').trim();
+    const clave = talle.toLowerCase();
+    if (!talle || vistos.has(clave)) continue;
+    vistos.add(clave);
+    const v = { talle };
+    const vacio = z => z === undefined || z === null || String(z).trim() === '';
+    if (!vacio(obj.cantidad)) {
+      const c = Number(obj.cantidad);
+      if (!Number.isInteger(c) || c < 1 || c > 999999) throw err400(`La cantidad del talle ${talle} tiene que ser un entero de 1 a 999999.`);
+      v.cantidad = c;
+    }
+    if (!vacio(obj.precio)) {
+      const p = Math.round(Number(obj.precio));
+      if (!Number.isFinite(p) || p <= 0) throw err400(`El precio del talle ${talle} tiene que ser un número mayor a cero.`);
+      v.precio = p;
+    }
+    lista.push(v);
+  }
+  if (lista.length > MAX_TALLES) throw err400(`Son demasiados talles: el máximo es ${MAX_TALLES} por publicación.`);
+  return lista;
+}
+
+/** La publicación de una variante: su talle, y su cantidad y precio si los tiene. No muta la original. */
+export function conVariante(p, v) {
+  const q = conTalle(p, v.talle);
+  if (v.cantidad !== undefined) q.cantidad = v.cantidad;
+  if (v.precio !== undefined) q.precio = v.precio;
+  return q;
+}
+
 /** La publicación con ese talle puesto (reemplaza o agrega SIZE). No muta la original. */
 export function conTalle(p, talle) {
   const resto = (p.atributos || []).filter(a => a.id !== 'SIZE');

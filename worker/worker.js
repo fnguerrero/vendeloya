@@ -30,7 +30,7 @@
 
 import { identificar, completarAtributos, responderPregunta as borradorConIA } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES, requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia, validarDescripcion, limpiarTalles, conTalle, itemsDeRegistro, juntarSeguimiento } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES, requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia, validarDescripcion, limpiarVariantes, conVariante, itemsDeRegistro, juntarSeguimiento } from './logica.js';
 
 const MAX_ITEMS_VISITAS = 30;
 
@@ -637,20 +637,21 @@ async function guiaTalles(env, cuerpo) {
  * Con `publicacion.talles` (ropa y calzado) revisa un ítem por talle: con User Products no hay `variations`.
  */
 async function revisar(env, cuerpo) {
-  const talles = limpiarTalles(cuerpo.publicacion?.talles);
-  return talles.length ? revisarVarios(env, cuerpo, talles) : revisarUno(env, cuerpo);
+  const variantes = limpiarVariantes(cuerpo.publicacion?.talles);
+  return variantes.length ? revisarVarios(env, cuerpo, variantes) : revisarUno(env, cuerpo);
 }
 
-async function revisarVarios(env, cuerpo, talles) {
+async function revisarVarios(env, cuerpo, variantes) {
   const p = cuerpo.publicacion;
   const fotos = await subirFotos(env, cuerpo.fotos || []);
-  const falta = faltantes({ ...conTalle(p, talles[0]), fotos });
+  const falta = faltantes({ ...conVariante(p, variantes[0]), fotos });
   if (falta.length) return { ok: false, fotos, errores: [`Falta completar: ${falta.join(', ')}.`] };
   const yo = await usuario(env);
-  const busqueda = await buscarGuia(env, conTalle(p, talles[0]), yo);
+  const busqueda = await buscarGuia(env, conVariante(p, variantes[0]), yo);
   const porTalle = [];
-  for (const talle of talles) {
-    const r = await revisarUno(env, { publicacion: conTalle(p, talle), fotos: fotos.map(id => ({ id })) }, { yo, busqueda });
+  for (const v of variantes) {
+    const talle = v.talle;
+    const r = await revisarUno(env, { publicacion: conVariante(p, v), fotos: fotos.map(id => ({ id })) }, { yo, busqueda });
     porTalle.push({ talle, ok: !!r.ok, errores: r.errores || [], avisos: r.avisos || [], guia: r.guia || null });
   }
   return {
@@ -736,18 +737,19 @@ async function emitirPublicacion(env, { cuerpoItem, sello, descripcion }) {
  * revisión (si uno no, no sale nada); después, si ML rechaza uno, los demás siguen y el resultado lo informa en `fallaron`.
  */
 async function publicar(env, cuerpo) {
-  const talles = limpiarTalles(cuerpo.publicacion?.talles);
-  if (!talles.length) return emitirPublicacion(env, await prepararPublicacion(env, cuerpo));
+  const variantes = limpiarVariantes(cuerpo.publicacion?.talles);
+  if (!variantes.length) return emitirPublicacion(env, await prepararPublicacion(env, cuerpo));
 
   const p = cuerpo.publicacion;
   if ((cuerpo.fotos || []).some(f => !f.id)) throw Object.assign(new Error(SIN_REVISAR), { status: 412 });
   const fotos = await subirFotos(env, cuerpo.fotos || []);
   const yo = await usuario(env);
-  const busqueda = await buscarGuia(env, conTalle(p, talles[0]), yo);
+  const busqueda = await buscarGuia(env, conVariante(p, variantes[0]), yo);
   const preparados = [];
-  for (const talle of talles) {
+  for (const v of variantes) {
+    const talle = v.talle;
     try {
-      preparados.push({ talle, prep: await prepararPublicacion(env, { publicacion: conTalle(p, talle), fotos: fotos.map(id => ({ id })) }, { yo, busqueda }) });
+      preparados.push({ talle, prep: await prepararPublicacion(env, { publicacion: conVariante(p, v), fotos: fotos.map(id => ({ id })) }, { yo, busqueda }) });
     } catch (e) {
       if (e.status !== 412) e.message = `Talle ${talle}: ${e.message}`;
       throw e;

@@ -586,10 +586,11 @@ $('analizar').addEventListener('click', analizar);
 
 /* Se arma un grupo de fotos por producto, se suma a la cola y se arman de a uno (para no
    saturar a Claude ni a MercadoLibre). Cada producto listo queda como un borrador normal
-   en el historial; la cola vive solo en esta pestaña y se usa para revisarlos en fila.
+   en el historial; la cola se guarda en el dispositivo (IndexedDB) y se usa para revisarlos en fila.
    estado: pendiente → armando → lista | error. */
 const MAX_COLA = 10;
 const cola = [];
+let colaGuardable = true;   // false si el navegador no dejó guardarla (IndexedDB bloqueado o sin lugar)
 let colaCorriendo = false;
 let colaNumero = 0;
 
@@ -605,9 +606,11 @@ function pintarCola() {
   $('cola-armar').textContent = colaCorriendo ? 'Armando…' : faltan ? (n > 1 ? `Armar ${faltan === 1 ? 'el que falta' : `los ${faltan}`}` : 'Armar') : fallaron ? 'Reintentar los que fallaron' : 'Armar todos';
   $('cola-vaciar').hidden = !n || colaCorriendo;
   $('lote-resumen').textContent = n ? `${listas} de ${n} listos` : 'cola vacía';
-  const porPerder = colaPorPerder(cola);
+  // La cola se guarda en este dispositivo; el aviso queda solo para cuando no se pudo guardar.
+  const porPerder = colaGuardable ? 0 : colaPorPerder(cola);
   $('cola-aviso').hidden = !porPerder;
-  $('cola-aviso').textContent = `${porPerder === 1 ? 'Falta armar 1 producto' : `Faltan armar ${porPerder} productos`}: si cerrás o recargás la pestaña, se pierde${porPerder === 1 ? '' : 'n'} (lo ya armado queda como borrador).`;
+  $('cola-aviso').textContent = `No se pudo guardar la cola en este dispositivo. ${porPerder === 1 ? 'Falta armar 1 producto' : `Faltan armar ${porPerder} productos`}: si cerrás o recargás la pestaña, se pierde${porPerder === 1 ? '' : 'n'} (lo ya armado queda como borrador).`;
+  programarGuardadoCola();
 
   $('cola-lista').replaceChildren(...cola.map(c => {
     const li = document.createElement('li');
@@ -633,6 +636,77 @@ function pintarCola() {
   const pendientesDeRevisar = cola.filter(c => c.estado === 'lista' && !c.visto && c.id !== estado.registroId).length;
   $('cola-siguiente').hidden = !sig;
   $('cola-siguiente').textContent = `Siguiente de la cola (${pendientesDeRevisar}) ›`;
+}
+
+/* ---- la cola se guarda en este dispositivo (IndexedDB): sobrevive a cerrar o recargar la pestaña ---- */
+
+let colaDB = null;
+let colaTimer = 0;
+let colaCargada = false;   // true cuando ya se leyó lo guardado (o no se pudo): recién ahí se empieza a guardar
+const nombreColaDB = () => (DEMO ? 'vendeloya-cola-demo' : 'vendeloya-cola');
+
+function abrirColaDB() {
+  return new Promise((ok, mal) => {
+    if (!window.indexedDB) return mal(new Error('Este navegador no guarda datos.'));
+    const r = indexedDB.open(nombreColaDB(), 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('cola');
+    r.onsuccess = () => ok(r.result);
+    r.onerror = () => mal(r.error);
+    r.onblocked = () => mal(new Error('Base bloqueada.'));
+  });
+}
+
+function pedirADB(modo, accion) {
+  return new Promise((ok, mal) => {
+    const tx = colaDB.transaction('cola', modo);
+    const req = accion(tx.objectStore('cola'));
+    tx.oncomplete = () => ok(req?.result);
+    tx.onerror = tx.onabort = () => mal(tx.error || new Error('No se pudo guardar.'));
+  });
+}
+
+/** Guarda la cola ahora. Si falla, se avisa (colaGuardable) y la app sigue andando como antes. */
+async function guardarColaYa() {
+  try {
+    colaDB ||= await abrirColaDB();
+    await pedirADB('readwrite', st => st.put(colaParaGuardar(cola, MAX_COLA), 'items'));
+    colaGuardable = true;
+  } catch {
+    colaGuardable = false;
+  }
+  pintarAvisoCola();
+}
+/** Junta varios cambios seguidos en un solo guardado. */
+function programarGuardadoCola() {
+  if (!colaCargada) return;   // al arrancar, la cola vacía no tiene que pisar lo que quedó guardado
+  clearTimeout(colaTimer);
+  colaTimer = setTimeout(guardarColaYa, 150);
+}
+function pintarAvisoCola() {
+  const porPerder = colaGuardable ? 0 : colaPorPerder(cola);
+  $('cola-aviso').hidden = !porPerder;
+  if (porPerder) $('cola-aviso').textContent = `No se pudo guardar la cola en este dispositivo. ${porPerder === 1 ? 'Falta armar 1 producto' : `Faltan armar ${porPerder} productos`}: si cerrás o recargás la pestaña, se pierde${porPerder === 1 ? '' : 'n'} (lo ya armado queda como borrador).`;
+}
+
+/** Al abrir la app: lo que quedó guardado vuelve a la cola (si todavía no se sumó nada en esta pestaña). */
+async function cargarColaGuardada() {
+  try {
+    colaDB ||= await abrirColaDB();
+    const guardada = colaRestaurada(await pedirADB('readonly', st => st.get('items')), MAX_COLA);
+    if (!guardada.length || cola.length) return;
+    cola.push(...guardada);
+    colaNumero = Math.max(colaNumero, ...guardada.map(c => c.numero));
+    pintarCola();
+    $('lote').open = true;
+    const faltan = guardada.filter(c => c.estado !== 'lista').length;
+    toast(`Recuperé la cola: ${guardada.length} ${guardada.length === 1 ? 'producto' : 'productos'}${faltan ? `, ${faltan} sin armar` : ''}.`);
+  } catch {
+    colaGuardable = false;
+    pintarCola();
+  } finally {
+    colaCargada = true;
+    if (cola.length) programarGuardadoCola();   // lo que se haya sumado mientras cargaba también se guarda
+  }
 }
 
 async function sumarAColaYa() {
@@ -1218,6 +1292,60 @@ function unaALaVez(fn) {
 function colaPorPerder(cola) {
   return (cola || []).filter(c => c.estado !== 'lista').length;
 }
+/**
+ * Lo que se guarda de la cola en el dispositivo (IndexedDB). Lo que estaba armándose vuelve a "pendiente"; lo que ya está
+ * listo pierde las fotos (ya están en su borrador del historial) y conserva el id y el título.
+ */
+function colaParaGuardar(cola, max = 10) {
+  return (cola || []).slice(0, max).map(c => {
+    const base = { numero: c.numero, thumb: c.thumb || '', estado: c.estado === 'armando' ? 'pendiente' : c.estado };
+    if (c.estado === 'lista') return { ...base, id: c.id, titulo: c.titulo || '', visto: !!c.visto };
+    return { ...base, fotos: (c.fotos || []).map(f => ({ dataUrl: f.dataUrl })), error: c.estado === 'error' ? (c.error || '') : '' };
+  });
+}
+/** La cola a partir de lo guardado, descartando lo que no tenga la forma esperada (nunca rompe el arranque). */
+function colaRestaurada(guardada, max = 10) {
+  if (!Array.isArray(guardada)) return [];
+  const cola = [];
+  for (const g of guardada) {
+    if (cola.length >= max) break;
+    if (!g || !['pendiente', 'error', 'lista'].includes(g.estado) || !Number.isInteger(g.numero)) continue;
+    const thumb = typeof g.thumb === 'string' ? g.thumb : '';
+    if (g.estado === 'lista') {
+      if (typeof g.id !== 'string' || !g.id) continue;
+      cola.push({ numero: g.numero, thumb, estado: 'lista', id: g.id, titulo: typeof g.titulo === 'string' ? g.titulo : '', visto: !!g.visto, fotos: [] });
+      continue;
+    }
+    const fotos = (Array.isArray(g.fotos) ? g.fotos : []).filter(f => typeof f?.dataUrl === 'string' && f.dataUrl.startsWith('data:image/')).map(f => ({ dataUrl: f.dataUrl }));
+    if (!fotos.length) continue;
+    cola.push({ numero: g.numero, thumb, estado: g.estado, fotos, error: g.estado === 'error' && typeof g.error === 'string' ? g.error : '' });
+  }
+  return cola;
+}
+/** Lo mismo que gtinValido del Worker: 8, 12, 13 o 14 dígitos con el dígito de control bien. */
+function gtinValidoApp(codigo) {
+  const d = String(codigo || '').replace(/[\s-]/g, '');
+  if (!/^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(d)) return false;
+  const nums = [...d].map(Number);
+  const verificador = nums.pop();
+  const suma = nums.reverse().reduce((s, n, i) => s + n * (i % 2 === 0 ? 3 : 1), 0);
+  return (10 - (suma % 10)) % 10 === verificador;
+}
+/** El código leído por la cámara, solo los dígitos y solo si es un GTIN válido ('' si no). */
+function gtinDeLectura(crudo) {
+  const d = String(crudo || '').replace(/[\s-]/g, '');
+  return gtinValidoApp(d) ? d : '';
+}
+/**
+ * Va juntando lecturas de la cámara: un código vale recién cuando es válido y sale en `necesarias` lecturas seguidas
+ * (una lectura suelta o mal leída no alcanza, y una inválida corta la racha). Devuelve { ultimo, veces, listo }.
+ */
+function acumularLectura(previo, crudo, necesarias = 2) {
+  const gtin = gtinDeLectura(crudo);
+  if (!gtin) return { ultimo: '', veces: 0, listo: '' };
+  const veces = previo?.ultimo === gtin ? (previo.veces || 0) + 1 : 1;
+  return { ultimo: gtin, veces, listo: veces >= necesarias ? gtin : '' };
+}
 /** Cómo queda el envío, dicho para el diálogo de confirmación. */
 function textoEnvio({ envio, envioGratis, retiroTambien }) {
   if (envio === 'retiro') return 'solo retiro en persona';
@@ -1372,7 +1500,148 @@ function campoAtributo(a) {
   // Al salir del campo, un número suelto queda con su unidad ("200" → "200 cm").
   if (a.tipo === 'number_unit') control.addEventListener('change', () => { control.value = conUnidad(a, control.value); });
   l.append(n, control);
+  // El código de barras se puede leer con la cámara (donde el navegador lo permite).
+  if (a.id === 'GTIN') {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'enlace'; b.textContent = '📷 Escanear con la cámara';
+    b.addEventListener('click', () => abrirEscaner(control));
+    l.append(b);
+  }
   return l;
+}
+
+/* ---------- escáner de código de barras ---------- */
+
+/*
+ * BarcodeDetector + cámara trasera (Chrome en el celular). Un código vale cuando es un GTIN válido y sale en dos lecturas
+ * seguidas (acumularLectura): una lectura suelta o mal leída no alcanza. Sin soporte del navegador se avisa y el campo se
+ * sigue escribiendo a mano. La cámara se apaga al cerrar, al leer o con Esc.
+ */
+const escaner = { flujo: null, detector: null, activo: false, racha: null, campo: null };
+
+const soportaEscaner = () => 'BarcodeDetector' in window && !!navigator.mediaDevices?.getUserMedia;
+
+function pararEscaner() {
+  escaner.activo = false;
+  escaner.flujo?.getTracks().forEach(t => t.stop());
+  escaner.flujo = null;
+  $('escaner-video').srcObject = null;
+}
+
+async function abrirEscaner(control) {
+  if (!soportaEscaner()) {
+    toast('Este navegador no sabe leer códigos con la cámara. Probá con Chrome en el celular, o escribí el número.');
+    return;
+  }
+  escaner.campo = control;
+  escaner.racha = null;
+  $('escaner-estado').textContent = 'Abriendo la cámara…';
+  $('escaner').showModal();
+  try {
+    const sabe = (await BarcodeDetector.getSupportedFormats?.()) || null;
+    const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e'].filter(f => !sabe || sabe.includes(f));
+    if (!formats.length) throw new Error('El navegador no lee códigos de barras de productos.');
+    escaner.detector = new BarcodeDetector({ formats });
+    escaner.flujo = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    if (!$('escaner').open) { pararEscaner(); return; }   // lo cerraron mientras pedía el permiso
+    $('escaner-video').srcObject = escaner.flujo;
+    await $('escaner-video').play();
+    escaner.activo = true;
+    $('escaner-estado').textContent = 'Apuntá al código de barras, con buena luz.';
+    leerCuadros();
+  } catch (e) {
+    pararEscaner();
+    $('escaner').close();
+    toast(`No pude usar la cámara: ${e?.name === 'NotAllowedError' ? 'no diste el permiso' : e?.message || 'error desconocido'}. Podés escribir el número.`);
+  }
+}
+
+async function leerCuadros() {
+  while (escaner.activo) {
+    try {
+      for (const c of await escaner.detector.detect($('escaner-video'))) {
+        escaner.racha = acumularLectura(escaner.racha, c.rawValue);
+        if (escaner.racha.listo) { usarCodigoLeido(escaner.racha.listo); return; }
+      }
+    } catch { /* un cuadro que no se pudo leer no frena el escaneo */ }
+    await new Promise(r => setTimeout(r, 120));
+  }
+}
+
+function usarCodigoLeido(gtin) {
+  const campo = escaner.campo;
+  pararEscaner();
+  $('escaner').close();
+  if (campo) {
+    campo.value = gtin;
+    campo.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  toast(`Código leído: ${gtin}`);
+}
+
+// La cámara se apaga ya al tocar cerrar o al apretar Esc (cancel llega antes que close); close queda de respaldo.
+$('escaner-cerrar').addEventListener('click', () => { pararEscaner(); $('escaner').close(); });
+$('escaner').addEventListener('cancel', pararEscaner);
+$('escaner').addEventListener('close', pararEscaner);
+
+/* ---------- atributos condicionales ---------- */
+
+/*
+ * Mientras se completa la ficha, se le pregunta a MercadoLibre (solo lectura, con una pausa) qué datos pasan a ser
+ * obligatorios con lo que ya está cargado, y se avisa antes de revisar. Es un extra: si ML no lo ofrece (404/405) se
+ * apaga para esa categoría, y cualquier otro fallo se ignora. No frena el Publicar: el validador sigue decidiendo.
+ */
+const condApagada = new Set();   // categorías donde ML dijo que no existe
+let condTimer = 0;
+let condUltima = '';
+
+function atributosCargados() {
+  const valores = new Map([...$('paso-revision').querySelectorAll('[data-id]')].map(c => [c.dataset.id, c.value.trim()]));
+  return estado.atributos.map(a => ({ id: a.id, opciones: a.opciones || [], valor: conUnidad(a, valores.get(a.id) || '') })).filter(a => a.valor);
+}
+
+function programarCondicionales() {
+  clearTimeout(condTimer);
+  condTimer = setTimeout(pedirCondicionales, 900);
+}
+
+async function pedirCondicionales() {
+  const categoria = $('categoria').value;
+  if (!categoria || sinRed || condApagada.has(categoria) || !estado.atributos.length || $('paso-revision').hidden) return;
+  const atributos = atributosCargados();
+  const clave = JSON.stringify([categoria, atributos.map(a => [a.id, a.valor])]);
+  if (clave === condUltima) return;
+  condUltima = clave;
+  try {
+    const r = await api('/api/condicionales', { categoria, atributos });
+    if (categoria !== $('categoria').value) return;   // mientras tanto cambió de categoría
+    if (!r.disponible) {
+      if (r.estado === 404 || r.estado === 405) condApagada.add(categoria);
+      marcarCondicionales([]);
+      return;
+    }
+    marcarCondicionales(r.requeridos || []);
+  } catch { /* es un extra: sin él la app anda igual */ }
+}
+
+/** Marca los datos que ML va a pedir y que todavía no son obligatorios en la ficha, y los lista en un aviso. */
+function marcarCondicionales(ids) {
+  for (const c of $('paso-revision').querySelectorAll('.campo.condicional')) c.classList.remove('condicional');
+  const nuevos = ids.filter(id => !estado.atributos.find(a => a.id === id)?.requerido);
+  const nombres = [];
+  for (const id of nuevos) {
+    const attr = estado.atributos.find(a => a.id === id);
+    const campo = $('paso-revision').querySelector(`[data-id="${CSS.escape(id)}"]`)?.closest('.campo');
+    if (campo) campo.classList.add('condicional');
+    nombres.push(attr?.nombre || id);
+  }
+  const vacios = nuevos.filter(id => { const c = $('paso-revision').querySelector(`[data-id="${CSS.escape(id)}"]`); return !c || !c.value.trim(); });
+  const aviso = $('aviso-condicionales');
+  aviso.hidden = !vacios.length;
+  if (vacios.length) {
+    const falta = vacios.map(id => estado.atributos.find(a => a.id === id)?.nombre || id);
+    aviso.textContent = `Con lo que cargaste, MercadoLibre también va a pedir: ${falta.join(', ')}. Completalo antes de publicar.`;
+  }
 }
 
 /** A la vista solo lo obligatorio; lo opcional, plegado en "Más datos". */
@@ -1397,7 +1666,7 @@ function dibujarCategoria(categoria, atributosCrudos, tipoElegido) {
   const atributos = normalizarAtributos(atributosCrudos);
   estado.atributos = atributos;
   estado.categoria = categoria;
-  $('bloque-talles').hidden = !atributos.some(a => a.id === 'SIZE');   // solo ropa y calzado
+  configurarVariantes(atributos);   // talles si la categoría tiene SIZE, colores si tiene COLOR
   pintarTalles();
   actualizarContador();
 
@@ -1457,8 +1726,9 @@ function pendientes() {
   const max = estado.categoria?.maxTitulo || 60;
   const titulo = $('titulo').value.trim();
   // Con varios talles el "Talle" de arriba no hace falta: cada publicación toma el suyo de la lista.
-  const conLista = variantesActuales().length > 0;
-  const faltan = [...$('paso-revision').querySelectorAll('.campo.requerido [data-id]')].filter(c => !c.value.trim() && !(conLista && c.dataset.id === 'SIZE'));
+  const vs = variantesActuales();
+  const lleva = { SIZE: vs.some(v => v.talle), COLOR: vs.some(v => v.color) };   // lo que cada variante trae por su cuenta
+  const faltan = [...$('paso-revision').querySelectorAll('.campo.requerido [data-id]')].filter(c => !c.value.trim() && !lleva[c.dataset.id]);
   const items = [
     { ok: estado.fotos.length > 0, texto: `${estado.fotos.length || 'Sin'} foto${estado.fotos.length === 1 ? '' : 's'}` },
     { ok: !!titulo && titulo.length <= max, texto: titulo.length > max ? `Título largo (${titulo.length}/${max})` : 'Título', el: $('titulo') },
@@ -1547,6 +1817,7 @@ function tocado(e) {
   marcarMedidas();
   if (e?.target?.id === 'nota') $('grupo-nota').querySelector('small').textContent = e.target.value.trim() ? 'tiene una nota' : 'no se publica';
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
+  if (e?.target?.dataset?.id) programarCondicionales();   // un dato de la ficha cambió: ver si ML pide algo más
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
   if (['envio', 'cantidad', 'tipo'].includes(e?.target?.id)) resumirVenta();
   if (['cantidad', 'precio'].includes(e?.target?.id) || e?.target?.closest?.('#variantes')) pintarTalles();
@@ -1608,8 +1879,8 @@ addEventListener('pagehide', guardarAlSalir);
 // Si el último guardado falló, el navegador pregunta antes de cerrar.
 addEventListener('beforeunload', e => {
   if (sinGuardar && $('guardado').textContent.startsWith('No se pudo')) e.preventDefault();
-  // La cola vive solo en esta pestaña: lo que no se armó todavía se perdería.
-  if (colaPorPerder(cola)) e.preventDefault();
+  // La cola se guarda en el dispositivo; solo si no se pudo, lo que no se armó todavía se perdería.
+  if (!colaGuardable && colaPorPerder(cola)) e.preventDefault();
 });
 
 /* ---------- historial ---------- */
@@ -2115,69 +2386,141 @@ const MAX_TALLES = 12;
  * de User Products MercadoLibre no admite variaciones: cada talle sale como una publicación propia.
  */
 const filasDeVariantes = () => [...$('variantes').querySelectorAll('.variante')];
+const tieneTalle = () => $('bloque-talles').dataset.talle !== '0';
+const tieneColor = () => $('bloque-talles').dataset.color !== '0';
+const rotuloDe = v => [v.talle, v.color].filter(Boolean).join(' · ');
 
-/** Las variantes que rigen: [{ talle, cantidad?, precio? }], sin talles vacíos ni repetidos. Vacía si la categoría no tiene talle. */
+/** Lo que dice una fila: { talle?, color? } sin espacios de más (solo lo que la categoría usa). */
+function identidadDeFila(fila) {
+  const limpio = c => fila.querySelector(c).value.replace(/\s+/g, ' ').trim();
+  return { talle: tieneTalle() ? limpio('.v-talle') : '', color: tieneColor() ? limpio('.v-color') : '' };
+}
+
+/** Las variantes que rigen: [{ talle?, color?, cantidad?, precio?, fotos? }], sin filas vacías ni repetidas. Vacía si la categoría no tiene talle ni color. */
 function variantesActuales() {
   if ($('bloque-talles').hidden) return [];
   const vistos = new Set();
   const lista = [];
   for (const fila of filasDeVariantes()) {
-    const talle = fila.querySelector('.v-talle').value.replace(/\s+/g, ' ').trim();
-    if (!talle || vistos.has(talle.toLowerCase())) continue;
-    vistos.add(talle.toLowerCase());
+    const { talle, color } = identidadDeFila(fila);
+    if (!talle && !color) continue;
+    const clave = `${talle.toLowerCase()}|${color.toLowerCase()}`;
+    if (vistos.has(clave)) continue;
+    vistos.add(clave);
     const cantidad = fila.querySelector('.v-cant').value.trim();
     const precio = fila.querySelector('.v-precio').value.replace(/\D/g, '');
-    lista.push({ talle, ...(cantidad ? { cantidad: Number(cantidad) } : {}), ...(precio ? { precio: Number(precio) } : {}) });
+    const fotos = (fila._fotos || []).filter(i => i < estado.fotos.length);   // las fotos que ya no están no cuentan
+    lista.push({ ...(talle ? { talle } : {}), ...(color ? { color } : {}), ...(cantidad ? { cantidad: Number(cantidad) } : {}), ...(precio ? { precio: Number(precio) } : {}),
+      ...(fotos.length && fotos.length < estado.fotos.length ? { fotos } : {}) });
   }
   return lista;
 }
 
-/** Qué está mal en las filas (cantidad o precio inválidos), para frenar el Publicar antes de preguntarle a MercadoLibre. */
+/** Cantidad o precio inválidos de las filas, para frenar el Publicar antes de preguntarle a MercadoLibre. */
 function erroresDeVariantes() {
   const errores = [];
   for (const fila of filasDeVariantes()) {
-    const talle = fila.querySelector('.v-talle').value.trim();
-    if (!talle) continue;
+    const nombre = rotuloDe(identidadDeFila(fila));
+    if (!nombre) continue;
     const c = fila.querySelector('.v-cant').value.trim();
     const p = fila.querySelector('.v-precio').value.replace(/\D/g, '');
-    if (c && !(Number.isInteger(Number(c)) && Number(c) >= 1)) errores.push({ texto: `Cantidad del talle ${talle}: 1 o más`, el: fila.querySelector('.v-cant') });
-    if (fila.querySelector('.v-precio').value.trim() && !(Number(p) > 0)) errores.push({ texto: `Precio del talle ${talle}`, el: fila.querySelector('.v-precio') });
+    if (c && !(Number.isInteger(Number(c)) && Number(c) >= 1)) errores.push({ texto: `Cantidad de ${nombre}: 1 o más`, el: fila.querySelector('.v-cant') });
+    if (fila.querySelector('.v-precio').value.trim() && !(Number(p) > 0)) errores.push({ texto: `Precio de ${nombre}`, el: fila.querySelector('.v-precio') });
   }
   return errores;
+}
+
+function textoFotosDeFila(fila) {
+  const sel = (fila._fotos || []).filter(i => i < estado.fotos.length);
+  return sel.length && sel.length < estado.fotos.length ? `Fotos: ${sel.map(i => i + 1).join(', ')}` : 'Fotos: todas';
+}
+
+/** Las miniaturas de la tira para elegir cuáles usa esta variante (sin ninguna elegida = todas). */
+function dibujarFotosDeFila(fila) {
+  const panel = fila.querySelector('.v-fotos-panel');
+  panel.replaceChildren(...estado.fotos.map((f, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'v-foto';
+    b.setAttribute('aria-label', `Foto ${i + 1}`);
+    b.setAttribute('aria-pressed', String((fila._fotos || []).includes(i)));
+    const img = document.createElement('img');
+    img.src = f.dataUrl || ''; img.alt = '';
+    const n = document.createElement('span');
+    n.textContent = String(i + 1);
+    b.append(img, n);
+    b.onclick = () => {
+      const sel = new Set(fila._fotos || []);
+      sel.has(i) ? sel.delete(i) : sel.add(i);
+      fila._fotos = [...sel].sort((a, c) => a - c);
+      dibujarFotosDeFila(fila);
+      fila.querySelector('.v-fotos').textContent = textoFotosDeFila(fila);
+      programarGuardado();
+    };
+    return b;
+  }));
+  const aviso = document.createElement('p');
+  aviso.className = 'ayuda';
+  aviso.textContent = estado.fotos.length ? 'Tocá las fotos que usa esta variante. Sin ninguna elegida usa todas.' : 'Todavía no hay fotos.';
+  panel.append(aviso);
 }
 
 function agregarFila(v = {}) {
   const fila = document.createElement('div');
   fila.className = 'variante';
+  fila._fotos = Array.isArray(v.fotos) ? v.fotos.filter(Number.isInteger) : [];
   const campo = (clase, etiqueta, valor, extra = {}) => {
     const i = document.createElement('input');
     i.type = 'text'; i.className = clase; i.autocomplete = 'off'; i.value = valor ?? '';
     i.setAttribute('aria-label', etiqueta);
     return Object.assign(i, extra);
   };
-  const quitar = document.createElement('button');
-  quitar.type = 'button'; quitar.className = 'icono v-quitar'; quitar.textContent = '✕';
-  quitar.setAttribute('aria-label', 'Quitar este talle');
-  quitar.onclick = () => { fila.remove(); pintarTalles(); programarGuardado(); };
-  fila.append(campo('v-talle', 'Talle', v.talle, { placeholder: 'Talle' }),
-    campo('v-cant', 'Cantidad de este talle', v.cantidad, { inputMode: 'numeric' }),
-    campo('v-precio', 'Precio de este talle', v.precio ? miles(v.precio) : '', { inputMode: 'numeric' }),
-    quitar);
+  const boton = (clase, texto, etiqueta, alTocar) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = clase; b.textContent = texto;
+    b.setAttribute('aria-label', etiqueta);
+    b.onclick = alTocar;
+    return b;
+  };
+  const color = campo('v-color', 'Color', v.color, { placeholder: 'Color' });
+  color.setAttribute('list', 'colores-sugeridos');
+  const fotos = boton('boton secundario v-fotos', textoFotosDeFila(fila), 'Elegir las fotos de esta variante', () => {
+    const panel = fila.querySelector('.v-fotos-panel');
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) dibujarFotosDeFila(fila);
+  });
+  const panel = document.createElement('div');
+  panel.className = 'v-fotos-panel'; panel.hidden = true;
+  fila.append(campo('v-talle', 'Talle', v.talle, { placeholder: 'Talle' }), color,
+    boton('icono v-quitar', '✕', 'Quitar esta variante', () => { fila.remove(); pintarTalles(); actualizarChecklist(); programarGuardado(); }),
+    campo('v-cant', 'Cantidad de esta variante', v.cantidad, { inputMode: 'numeric' }),
+    campo('v-precio', 'Precio de esta variante', v.precio ? miles(v.precio) : '', { inputMode: 'numeric' }),
+    fotos,
+    boton('icono v-otro-color', '＋', 'Otro color de este talle', () => {
+      const { talle } = identidadDeFila(fila);
+      const nueva = agregarFila({ talle });
+      fila.after(nueva);
+      nueva.querySelector('.v-color').focus();
+      pintarTalles();
+      actualizarChecklist();
+    }),
+    panel);
   $('variantes').append(fila);
   return fila;
 }
 
-/** Los talles que estén en el campo de "Agregar" pasan a ser filas (acepta "40, 41, 42"). Los repetidos no se duplican. */
+/** Lo escrito en "Agregar" pasa a ser filas: talles ("40, 41") o, si la categoría no tiene talle, colores ("Rojo, Azul"). */
 function agregarDesdeCampo() {
-  const ya = new Set(variantesActuales().map(v => v.talle.toLowerCase()));
+  const solo = tieneTalle() ? 'talle' : 'color';
+  const ya = new Set(variantesActuales().map(v => (v[solo] || '').toLowerCase()).filter(Boolean));
   for (const t of $('talles-nuevo').value.split(/[,;\n]/)) {
-    const talle = t.replace(/\s+/g, ' ').trim();
-    if (!talle || ya.has(talle.toLowerCase())) continue;
-    ya.add(talle.toLowerCase());
-    agregarFila({ talle });
+    const valor = t.replace(/\s+/g, ' ').trim();
+    if (!valor || ya.has(valor.toLowerCase())) continue;
+    ya.add(valor.toLowerCase());
+    agregarFila({ [solo]: valor });
   }
   $('talles-nuevo').value = '';
   pintarTalles();
+  actualizarChecklist();   // el botón Publicar depende de lo que falte, y las filas nuevas cambian lo que falta
   programarGuardado();
 }
 
@@ -2187,18 +2530,37 @@ function dibujarVariantes(lista = []) {
   pintarTalles();
 }
 
+/** Qué columnas usa la categoría: talle si trae SIZE, color si trae COLOR. */
+function configurarVariantes(atributos) {
+  const talle = atributos.some(a => a.id === 'SIZE');
+  const color = atributos.some(a => a.id === 'COLOR');
+  const bloque = $('bloque-talles');
+  bloque.hidden = !talle && !color;
+  bloque.dataset.talle = talle ? '1' : '0';
+  bloque.dataset.color = color ? '1' : '0';
+  $('variantes-titulo').textContent = talle && color ? 'Talles y colores a publicar' : color ? 'Colores a publicar' : 'Talles a publicar';
+  $('talles-nuevo').placeholder = talle ? 'Agregar: 40, 41, 42' : 'Agregar: Rojo, Azul';
+  $('talles-nuevo').setAttribute('aria-label', talle ? 'Agregar talles' : 'Agregar colores');
+  // Colores sugeridos: las opciones del atributo COLOR de la categoría (se acepta cualquier texto).
+  const opciones = atributos.find(a => a.id === 'COLOR')?.opciones || [];
+  $('colores-sugeridos').replaceChildren(...opciones.map(o => { const op = document.createElement('option'); op.value = o.nombre; return op; }));
+}
+
 function pintarTalles() {
   const lista = variantesActuales();
   // Lo que se deja vacío en una fila usa lo común: se muestra como pista.
   for (const fila of filasDeVariantes()) {
     fila.querySelector('.v-cant').placeholder = `Cant. ${$('cantidad').value || 1}`;
     fila.querySelector('.v-precio').placeholder = precioActual() ? `$ ${miles(precioActual())}` : '$ precio';
+    fila.querySelector('.v-fotos').textContent = textoFotosDeFila(fila);
   }
+  const filas = filasDeVariantes().filter(f => rotuloDe(identidadDeFila(f))).length;
   const ayuda = $('talles-ayuda');
   ayuda.classList.toggle('error-campo', lista.length > MAX_TALLES);
-  if (lista.length > MAX_TALLES) ayuda.textContent = `Son demasiados: el máximo es ${MAX_TALLES} talles por publicación.`;
-  else if (!lista.length) ayuda.textContent = 'Opcional. Sin talles acá se publica uno solo, el de “Talle” más arriba. Con varios, cada talle sale como una publicación propia, con su cantidad y su precio (vacío = los de arriba).';
-  else ayuda.textContent = `${lista.length} ${lista.length > 1 ? 'publicaciones' : 'publicación'}, una por talle. Lo que dejes vacío usa la cantidad y el precio de arriba.`;
+  const que = tieneTalle() && tieneColor() ? 'talle y color' : tieneColor() ? 'color' : 'talle';
+  if (lista.length > MAX_TALLES) ayuda.textContent = `Son demasiadas: el máximo es ${MAX_TALLES} variantes por publicación.`;
+  else if (!lista.length) ayuda.textContent = `Opcional. Sin filas acá se publica una sola, con el ${tieneTalle() ? 'talle' : 'color'} de más arriba. Con varias, cada ${que} sale como una publicación propia, con su cantidad, su precio y sus fotos (vacío = los de arriba).`;
+  else ayuda.textContent = `${lista.length} ${lista.length > 1 ? 'publicaciones' : 'publicación'}, una por ${que}. Lo que dejes vacío usa la cantidad, el precio y las fotos de arriba.${filas > lista.length ? ` Hay ${filas - lista.length} ${filas - lista.length > 1 ? 'filas repetidas' : 'fila repetida'}: se usa una sola.` : ''}`;
 }
 
 $('variantes').addEventListener('input', e => {
@@ -2291,7 +2653,7 @@ $('publicar').addEventListener('click', async () => {
   const unidades = n => `${n} unidad${n > 1 ? 'es' : ''}`;
   $('confirmar-texto').textContent = `"${p.titulo}" a ${pesos(p.precio)}${porTalle ? '' : `, ${unidades(p.cantidad)}`}, ${$('tipo').selectedOptions[0]?.textContent || ''}. Envío: ${textoEnvio(p)}.`
     + (medidas ? ` Paquete: ${medidas.pesoG.toLocaleString('es-AR')} g, ${medidas.largoCm} × ${medidas.anchoCm} × ${medidas.altoCm} cm.` : '')
-    + (porTalle ? ` Se crean ${p.talles.length} publicaciones, una por talle: ${p.talles.map(v => `${v.talle} (${unidades(v.cantidad ?? p.cantidad)}${v.precio ? `, ${pesos(v.precio)}` : ''})`).join('; ')}.` : '');
+    + (porTalle ? ` Se crean ${p.talles.length} publicaciones, una por variante: ${p.talles.map(v => `${rotuloDe(v)} (${unidades(v.cantidad ?? p.cantidad)}${v.precio ? `, ${pesos(v.precio)}` : ''}${v.fotos ? `, ${v.fotos.length === 1 ? 'foto' : 'fotos'} ${v.fotos.map(i => i + 1).join(' y ')}` : ''})`).join('; ')}.` : '');
   const avisoGratis = avisoEnvioGratis({ envio: p.envio, envioGratis: p.envioGratis, costoEnvio: p.costoEnvio });
   $('confirmar-avisos').replaceChildren(...[...notas, ...(avisoGratis ? [avisoGratis] : [])].map(t => { const li = document.createElement('li'); li.textContent = t; return li; }));
   $('confirmar').showModal();
@@ -2309,7 +2671,8 @@ function dibujarTalles(lista, items = [], detalle = []) {
     // Con el seguimiento a mano, cada talle dice cómo va: estado, unidades que quedan, vendidas y visitas.
     const d = detalle.find(x => x.id === i.id);
     const datos = d ? [ESTADOS[d.estado] || d.estado, d.disponibles != null ? `${d.disponibles} u.` : '', d.vendidas ? `${d.vendidas} vend.` : '', d.visitas != null ? `${d.visitas} vis.` : ''].filter(Boolean).join(' · ') : '';
-    a.textContent = `Talle ${i.talle || '?'}${datos ? ` · ${datos}` : i.id ? ` · ${i.id}` : ''}`;
+    const quien = [i.talle ? `Talle ${i.talle}` : '', i.color || ''].filter(Boolean).join(' · ') || 'Variante';
+    a.textContent = `${quien}${datos ? ` · ${datos}` : i.id ? ` · ${i.id}` : ''}`;
     li.append(a);
     return li;
   }));
@@ -2317,8 +2680,8 @@ function dibujarTalles(lista, items = [], detalle = []) {
 
 function mostrarListo(ml, aviso, items = [], fallaron = []) {
   const varios = items.length > 1;
-  const noSalieron = fallaron.length ? ` No salieron: ${fallaron.map(f => `${f.talle} (${f.error})`).join('; ')}. Publicalos aparte.` : '';
-  $('listo-texto').textContent = (varios ? `Quedaron publicadas ${items.length}, una por talle.` : `Quedó publicada${ml.id ? ` (${ml.id})` : ''}.`) + (aviso ? ' ' + aviso : '') + noSalieron;
+  const noSalieron = fallaron.length ? ` No salieron: ${fallaron.map(f => `${rotuloDe(f)} (${f.error})`).join('; ')}. Publicalos aparte.` : '';
+  $('listo-texto').textContent = (varios ? `Quedaron publicadas ${items.length}, una por variante.` : `Quedó publicada${ml.id ? ` (${ml.id})` : ''}.`) + (aviso ? ' ' + aviso : '') + noSalieron;
   dibujarTalles($('listo-items'), items);
   const portada = estado.fotos[0]?.dataUrl || '';
   $('listo-foto').src = portada;
@@ -2444,8 +2807,16 @@ async function apiDemo(ruta, cuerpo, metodo) {
   atributos.push({ id: 'VALUE_ADDED_TAX', nombre: 'IVA', tipo: 'list', requerido: true, unidades: [], valor: 'Exento',
     opciones: ['Exento', '0 %', '10.5 %', '21 %', '27 %'].map((nombre, i) => ({ id: String(i), nombre })) });
   // ?demo&moda: la categoría trae talle, para probar la publicación con varios talles sin tocar MercadoLibre.
-  if (new URLSearchParams(location.search).has('moda')) atributos.push({ id: 'SIZE', nombre: 'Talle', tipo: 'list', requerido: true, unidades: [], valor: '',
+  // ?demo&moda: talle y color. ?demo&color: solo color (categoría sin talle).
+  const q = new URLSearchParams(location.search);
+  if (q.has('moda')) atributos.push({ id: 'SIZE', nombre: 'Talle', tipo: 'list', requerido: true, unidades: [], valor: '',
     opciones: ['39', '40', '41', '42', '43'].map((nombre, i) => ({ id: String(i), nombre })) });
+  if (q.has('moda') || q.has('color')) {
+    const i = atributos.findIndex(a => a.id === 'COLOR');
+    if (i >= 0) atributos.splice(i, 1);
+    atributos.push({ id: 'COLOR', nombre: 'Color', tipo: 'list', requerido: true, unidades: [], valor: '',
+      opciones: ['Rojo', 'Azul', 'Negro', 'Blanco'].map((nombre, k) => ({ id: String(k), nombre })) });
+  }
   if (ruta === '/api/analizar') return {
     identificacion: { producto: 'Taladro percutor eléctrico', marca: 'Black+Decker', modelo: '', estado_detalle: 'Uso visible en el mandril, carcasa sana. Se ve el cable entero y el selector de velocidad funciona según la foto.',
       advertencias: ['No se ve el modelo: buscalo en la etiqueta de abajo.', 'Sacá una foto del enchufe y del cable completo.', 'Aclarar si incluye mechas o maletín.'], confianza: 'media' },
@@ -2464,20 +2835,29 @@ async function apiDemo(ruta, cuerpo, metodo) {
       precio: 45000, categoria: 'MLA5232', tipoPublicacion: 'gold_special', garantia: 'Sin garantía' }
   };
   if (ruta === '/api/categoria') return { categoria, atributos };
+  if (ruta === '/api/condicionales') {
+    // Demo: si hay potencia cargada, ML pediría también el peso. Con la falla 'condicionales-404' simula que ML no lo ofrece.
+    if (FALLAS.has('condicionales-404')) return { disponible: false, requeridos: [], estado: 404 };
+    const tiene = id => (cuerpo.atributos || []).some(a => a.id === id && String(a.valor || '').trim());
+    return { disponible: true, requeridos: tiene('POWER') ? ['WEIGHT'] : [] };
+  }
   if (ruta === '/api/revisar') {
     // Igual que MercadoLibre: un número suelto en un dato con unidad se rechaza.
     const sinUnidad = cuerpo.publicacion.atributos.filter(a => a.tipo === 'number_unit' && /^\d+([.,]\d+)?$/.test(String(a.valor || '').trim()));
     if (sinUnidad.length) return { ok: false, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`),
       errores: sinUnidad.map(a => `Attribute ${a.id} with value ${a.valor} is required and was omitted. The provided unit is not valid.`) };
-    const talles = (cuerpo.publicacion.talles || []).map(v => v.talle ?? v);
-    const falta = cuerpo.publicacion.atributos.filter(a => a.requerido && !a.valor && !(talles.length && a.id === 'SIZE')).map(a => a.nombre);
-    if (!falta.length && talles.length) {
-      // Como el Worker: un ítem por talle; el 99 no está en la guía de talles.
-      const porTalle = talles.map(talle => talle === '99'
-        ? { talle, ok: false, errores: ['El talle «99» no está en la guía de talles «Standard». Talles de esa guía: 39, 40, 41, 42, 43.'], avisos: [] }
-        : { talle, ok: true, errores: [], avisos: [] });
+    const vars = (cuerpo.publicacion.talles || []).map(v => (typeof v === 'string' ? { talle: v } : v));
+    const lleva = { SIZE: vars.some(v => v.talle), COLOR: vars.some(v => v.color) };
+    const falta = cuerpo.publicacion.atributos.filter(a => a.requerido && !a.valor && !lleva[a.id]).map(a => a.nombre);
+    if (!falta.length && vars.length) {
+      // Como el Worker: un ítem por variante; el talle 99 no está en la guía de talles; una foto que no existe frena todo.
+      const mala = vars.find(v => (v.fotos || []).some(i => i >= cuerpo.fotos.length));
+      if (mala) throw new Error(`La foto ${mala.fotos.find(i => i >= cuerpo.fotos.length) + 1} de ${rotuloDe(mala)} no existe: la publicación tiene ${cuerpo.fotos.length}.`);
+      const porTalle = vars.map(v => v.talle === '99'
+        ? { talle: v.talle ?? null, color: v.color ?? null, ok: false, errores: ['El talle «99» no está en la guía de talles «Standard». Talles de esa guía: 39, 40, 41, 42, 43.'], avisos: [] }
+        : { talle: v.talle ?? null, color: v.color ?? null, ok: true, errores: [], avisos: [] });
       return { ok: porTalle.every(t => t.ok), fotos: cuerpo.fotos.map((_, i) => `demo-${i}`), porTalle,
-        errores: porTalle.flatMap(t => t.errores.map(e => `Talle ${t.talle}: ${e}`)), avisos: [] };
+        errores: porTalle.flatMap(t => t.errores.map(e => `Talle ${t.talle}${t.color ? ` · ${t.color}` : ''}: ${e}`)), avisos: [] };
     }
     return falta.length
       ? { ok: false, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`), errores: [`Falta completar: ${falta.join(', ')}.`] }
@@ -2493,11 +2873,12 @@ async function apiDemo(ruta, cuerpo, metodo) {
     return { disponible: true, precio, tipos: [t('gold_special', 'Clásica', 13), ...(sinPremium ? [] : [t('gold_pro', 'Premium', 18), t('free', 'Gratuita', 0)])] };
   }
   if (ruta === '/api/publicar') {
-    const talles = (cuerpo.publicacion?.talles || []).map(v => v.talle ?? v);
-    if (!talles.length) return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
+    const vars = (cuerpo.publicacion?.talles || []).map(v => (typeof v === 'string' ? { talle: v } : v));
+    if (!vars.length) return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
     // El 44 simula un rechazo de MercadoLibre al crear: los demás salen y se informa cuál falló.
-    const items = talles.filter(t => t !== '44').map((talle, i) => ({ talle, id: `MLA-DEMO-${i + 1}`, permalink: `https://www.mercadolibre.com.ar/MLA-DEMO-${i + 1}`, estado: 'demo' }));
-    return { id: items[0].id, permalink: items[0].permalink, estado: 'demo', items, fallaron: talles.includes('44') ? [{ talle: '44', error: 'MercadoLibre rechazó este talle' }] : [] };
+    const quien = v => ({ talle: v.talle ?? null, color: v.color ?? null });
+    const items = vars.filter(v => v.talle !== '44').map((v, i) => ({ ...quien(v), id: `MLA-DEMO-${i + 1}`, permalink: `https://www.mercadolibre.com.ar/MLA-DEMO-${i + 1}`, estado: 'demo' }));
+    return { id: items[0].id, permalink: items[0].permalink, estado: 'demo', items, fallaron: vars.filter(v => v.talle === '44').map(v => ({ ...quien(v), error: 'MercadoLibre rechazó este talle' })) };
   }
 
   const regs = demoRegs();
@@ -2575,11 +2956,12 @@ if (DEMO) {
   document.title = 'VendeloYa (demo)';
   // Ganchos para probar sin manos (solo en el demo).
   window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista, api, cargarHistorial, fotosCambiaron, lineaMedidas, armarRespaldo, aplicarTema,
-    hacerOtraIgual, abrirRegistro, cola, correrCola, sumarACola, pintarCola, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion, variantesActuales, agregarDesdeCampo, pintarTalles, abrirPublicacion, pub };
+    hacerOtraIgual, abrirRegistro, cola, escaner, abrirEscaner, soportaEscaner, pedirCondicionales, marcarCondicionales, condApagada, guardarColaYa, cargarColaGuardada, correrCola, sumarACola, pintarCola, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion, variantesActuales, agregarDesdeCampo, agregarFila, dibujarFotosDeFila, pintarTalles, abrirPublicacion, pub };
 }
 dibujarFotos();
 refrescarCuenta();
 cargarHistorial();
+cargarColaGuardada();
 // Si había algo abierto (se recargó la página o se cerró la app), se retoma.
 if (local('vendeloya.actual') && (clave() || DEMO)) abrirRegistro(local('vendeloya.actual'), { silencioso: true });
 if ('serviceWorker' in navigator && !DEMO) navigator.serviceWorker.register('sw.js').catch(() => {});

@@ -755,3 +755,33 @@ dialog.config .titulo-seccion h2 { margin: 0; }
 .variante .v-quitar { min-width: 36px; height: 36px; }
 .variante-nueva { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 8px; }
 .variante-nueva input { margin: 0; min-width: 0; }
+
+/* Variantes con color y fotos propias: dos líneas por fila (talle, color, ✕ / cantidad, precio, fotos, ＋) */
+.variante { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) auto auto; }
+.variante > .v-talle { grid-column: 1; grid-row: 1; }
+.variante > .v-color { grid-column: 2 / 4; grid-row: 1; }
+.variante > .v-quitar { grid-column: 4; grid-row: 1; }
+.variante > .v-cant { grid-column: 1; grid-row: 2; }
+.variante > .v-precio { grid-column: 2; grid-row: 2; }
+.variante > .v-fotos { grid-column: 3; grid-row: 2; white-space: nowrap; padding: 8px 10px; font-size: .8rem; }
+.variante > .v-otro-color { grid-column: 4; grid-row: 2; min-width: 36px; height: 36px; }
+.variante > .v-fotos-panel { grid-column: 1 / -1; }
+#bloque-talles[data-talle="0"] .v-talle, #bloque-talles[data-color="0"] .v-color, #bloque-talles[data-color="0"] .v-otro-color { display: none; }
+#bloque-talles[data-talle="0"] .variante > .v-color { grid-column: 1 / 4; }
+#bloque-talles[data-color="0"] .variante > .v-talle { grid-column: 1 / 4; }
+.variante { padding: 8px 0 10px; border-bottom: 1px solid var(--borde); }
+.v-fotos-panel { display: flex; flex-wrap: wrap; gap: 6px; }
+.v-fotos-panel .ayuda { flex-basis: 100%; margin: 2px 0 0; }
+.v-foto { position: relative; width: 52px; height: 52px; padding: 0; border: 2px solid var(--borde-campo); border-radius: 8px; overflow: hidden; background: none; cursor: pointer; }
+.v-foto img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .55; }
+.v-foto span { position: absolute; right: 2px; bottom: 2px; min-width: 18px; padding: 0 4px; border-radius: 9px; background: rgba(0,0,0,.65); color: #fff; font-size: .72rem; text-align: center; }
+.v-foto[aria-pressed="true"] { border-color: var(--azul); }
+.v-foto[aria-pressed="true"] img { opacity: 1; }
+
+/* Datos que MercadoLibre va a pedir según lo cargado (atributos condicionales) */
+.aviso-condicional { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: rgba(255, 230, 0, .25); border-left: 4px solid var(--amarillo); font-size: .9rem; }
+.campo.condicional > span.nombre::after { content: " · lo va a pedir MercadoLibre"; color: #8a6d00; font-weight: 600; font-size: .8rem; }
+
+/* Escáner de código de barras */
+.escaner { width: min(92vw, 460px); }
+.escaner video { display: block; width: 100%; max-height: 60vh; border-radius: 10px; background: #000; object-fit: cover; }

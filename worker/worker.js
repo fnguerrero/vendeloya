@@ -12,6 +12,7 @@
      POST /api/analizar          fotos → propuesta de publicación
      POST /api/categoria         otra categoría → sus atributos
      POST /api/guia-talles       ropa/calzado: guías de talles y talles disponibles (solo lectura)
+     POST /api/condicionales     atributos que pasan a ser obligatorios según lo cargado (solo lectura)
      POST /api/revisar           sube fotos y valida SIN publicar
      POST /api/publicar          publica de verdad + descripción
      POST /api/desconectar       borra el token de MercadoLibre (cerrar sesión)
@@ -30,9 +31,12 @@
 
 import { identificar, completarAtributos, responderPregunta as borradorConIA } from './ia.js';
 import * as registros from './registros.js';
-import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES, requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia, validarDescripcion, limpiarVariantes, conVariante, itemsDeRegistro, juntarSeguimiento } from './logica.js';
+import { elegirAtributos, armarItem, faltantes, precioDeReferencia, redondearPrecio, erroresML, limpiarDescripcion, aplicarGtin, aplicarDefaults, separarCausas, armarSeguimiento, estadoPublicacion, cambioPublicacion, validarRespuesta, elegirParecidos, leerComisiones, leerVisitas, bloqueoPorPermisos, mensajePermisoPreguntas, paraHuella, marcarValidado, estaValidado, gastarValidacion, CONDICIONES, requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia, validarDescripcion, limpiarVariantes, conVariante, fotosDeVariante, etiquetaVariante, itemsDeRegistro, juntarSeguimiento, leerCondicionales, atributoParaML } from './logica.js';
 
 const MAX_ITEMS_VISITAS = 30;
+
+/** «Talle 40», «Talle 40 · Rojo» o «Color Rojo»: cómo se nombra una variante en los mensajes. */
+const rotuloVariante = v => { const e = etiquetaVariante(v); return e[0].toUpperCase() + e.slice(1); };
 
 const ML_API = 'https://api.mercadolibre.com';
 const ML_AUTH = 'https://auth.mercadolibre.com.ar/authorization';
@@ -617,6 +621,28 @@ async function conGuiaDeTalles(env, p, yo, busqueda) {
   return { p: aplicarGuia(p, b.guia, hallada), guia: { id: String(b.guia.id), nombre: Object.values(b.guia.names || {})[0] || null, tipo: b.guia.type || null, fila: hallada.fila } };
 }
 
+/* ---------- atributos condicionales ---------- */
+
+const sinCondicionales = new Set();   // categorías donde MercadoLibre dijo que no existe: no se vuelve a preguntar (dura lo que dure el Worker en memoria)
+
+/**
+ * Solo lectura: qué atributos pasan a ser obligatorios con lo que ya se cargó (POST /categories/{id}/attributes/conditional).
+ * Es un extra y su contrato no está confirmado: ante cualquier respuesta que no sea 200 devuelve disponible:false y la app
+ * sigue como siempre (el validador igual los descubre al revisar). Nunca escribe nada.
+ */
+async function condicionales(env, cuerpo) {
+  const categoria = String(cuerpo.categoria || '');
+  if (!/^[A-Z]{3}\d+$/.test(categoria)) throw Object.assign(new Error('Categoría inválida.'), { status: 400 });
+  if (sinCondicionales.has(categoria)) return { disponible: false, requeridos: [] };
+  const attributes = (Array.isArray(cuerpo.atributos) ? cuerpo.atributos : []).map(a => atributoParaML(a, a?.valor)).filter(Boolean).slice(0, 80);
+  const { status, datos } = await ml(env, `/categories/${categoria}/attributes/conditional`, { metodo: 'POST', cuerpo: { attributes }, tolerar: [400, 403, 404, 405, 422, 429, 500, 502, 503] });
+  if (status !== 200) {
+    if (status === 404 || status === 405) sinCondicionales.add(categoria);
+    return { disponible: false, requeridos: [], estado: status };
+  }
+  return { disponible: true, requeridos: leerCondicionales(datos) };
+}
+
 /** Solo lectura: qué guías de talles hay para esta categoría y qué talles tiene la elegida. No valida ni publica. */
 async function guiaTalles(env, cuerpo) {
   const yo = await usuario(env);
@@ -644,19 +670,19 @@ async function revisar(env, cuerpo) {
 async function revisarVarios(env, cuerpo, variantes) {
   const p = cuerpo.publicacion;
   const fotos = await subirFotos(env, cuerpo.fotos || []);
-  const falta = faltantes({ ...conVariante(p, variantes[0]), fotos });
+  for (const v of variantes) fotosDeVariante(fotos, v);   // una foto que no existe frena todo antes de llamar a nadie
+  const falta = faltantes({ ...conVariante(p, variantes[0]), fotos: fotosDeVariante(fotos, variantes[0]) });
   if (falta.length) return { ok: false, fotos, errores: [`Falta completar: ${falta.join(', ')}.`] };
   const yo = await usuario(env);
   const busqueda = await buscarGuia(env, conVariante(p, variantes[0]), yo);
   const porTalle = [];
   for (const v of variantes) {
-    const talle = v.talle;
-    const r = await revisarUno(env, { publicacion: conVariante(p, v), fotos: fotos.map(id => ({ id })) }, { yo, busqueda });
-    porTalle.push({ talle, ok: !!r.ok, errores: r.errores || [], avisos: r.avisos || [], guia: r.guia || null });
+    const r = await revisarUno(env, { publicacion: conVariante(p, v), fotos: fotosDeVariante(fotos, v).map(id => ({ id })) }, { yo, busqueda });
+    porTalle.push({ talle: v.talle ?? null, color: v.color ?? null, ok: !!r.ok, errores: r.errores || [], avisos: r.avisos || [], guia: r.guia || null });
   }
   return {
     ok: porTalle.every(t => t.ok), fotos, porTalle,
-    errores: porTalle.flatMap(t => t.errores.map(e => `Talle ${t.talle}: ${e}`)),
+    errores: porTalle.flatMap(t => t.errores.map(e => `${rotuloVariante(t)}: ${e}`)),
     avisos: [...new Set(porTalle.flatMap(t => t.avisos))],
     guia: porTalle.find(t => t.guia)?.guia || null
   };
@@ -743,26 +769,27 @@ async function publicar(env, cuerpo) {
   const p = cuerpo.publicacion;
   if ((cuerpo.fotos || []).some(f => !f.id)) throw Object.assign(new Error(SIN_REVISAR), { status: 412 });
   const fotos = await subirFotos(env, cuerpo.fotos || []);
+  for (const v of variantes) fotosDeVariante(fotos, v);
   const yo = await usuario(env);
   const busqueda = await buscarGuia(env, conVariante(p, variantes[0]), yo);
   const preparados = [];
   for (const v of variantes) {
-    const talle = v.talle;
+    const quien = { talle: v.talle ?? null, color: v.color ?? null };
     try {
-      preparados.push({ talle, prep: await prepararPublicacion(env, { publicacion: conVariante(p, v), fotos: fotos.map(id => ({ id })) }, { yo, busqueda }) });
+      preparados.push({ quien, prep: await prepararPublicacion(env, { publicacion: conVariante(p, v), fotos: fotosDeVariante(fotos, v).map(id => ({ id })) }, { yo, busqueda }) });
     } catch (e) {
-      if (e.status !== 412) e.message = `Talle ${talle}: ${e.message}`;
+      if (e.status !== 412) e.message = `${rotuloVariante(quien)}: ${e.message}`;
       throw e;
     }
   }
   const items = [];
   const fallaron = [];
-  for (const { talle, prep } of preparados) {
+  for (const { quien, prep } of preparados) {
     try {
       const r = await emitirPublicacion(env, prep);
-      items.push({ talle, ...r });
+      items.push({ ...quien, ...r });
     } catch (e) {
-      fallaron.push({ talle, error: e.message });
+      fallaron.push({ ...quien, error: e.message });
     }
   }
   if (!items.length) throw Object.assign(new Error(`No salió ningún talle. ${fallaron[0].error}`), { status: 502 });
@@ -826,7 +853,7 @@ export default {
       const pub = /^\/api\/publicaciones\/([A-Z]{3}\d{6,})$/.exec(url.pathname);
       if (pub) return json(await cambiarPublicacion(env, pub[1], cuerpo), 200, origen);
 
-      const rutas = { '/api/analizar': analizar, '/api/categoria': cambiarCategoria, '/api/revisar': revisar, '/api/publicar': publicar, '/api/guia-talles': guiaTalles };
+      const rutas = { '/api/analizar': analizar, '/api/categoria': cambiarCategoria, '/api/revisar': revisar, '/api/publicar': publicar, '/api/guia-talles': guiaTalles, '/api/condicionales': condicionales };
       const ruta = rutas[url.pathname];
       if (!ruta) return json({ error: 'No existe.' }, 404, origen);
       return json(await ruta(env, cuerpo), 200, origen);

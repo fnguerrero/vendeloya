@@ -12,7 +12,7 @@ import {
   leerPaquete, paqueteParaML, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete,
   huellaItem, paraHuella, marcarValidado, estaValidado, gastarValidacion, leerVisitas,
   requisitosDeGuia, armarBusquedaGuia, elegirGuia, filaDeGuia, tallesDeGuia, aplicarGuia,
-  validarDescripcion, limpiarTalles, conTalle, MAX_TALLES, itemsDeRegistro, juntarSeguimiento, limpiarVariantes, conVariante
+  validarDescripcion, limpiarTalles, conTalle, MAX_TALLES, itemsDeRegistro, juntarSeguimiento, limpiarVariantes, conVariante, etiquetaVariante, fotosDeVariante, leerCondicionales
 } from './logica.js';
 
 const attrs = JSON.parse(readFileSync(new URL('./fixtures/attrs-MLA5232.json', import.meta.url)));
@@ -334,7 +334,7 @@ test('leerComisiones: null, "" o ausente es "no informado", nunca 0 (ni comisió
 const fuenteApp = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const bloqueCompartido = /\/\* >>> compartido([\s\S]*?)\/\* <<< compartido \*\//.exec(fuenteApp)?.[1];
 assert.ok(bloqueCompartido, 'app.js no tiene el bloque ">>> compartido"');
-const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete', 'unaALaVez', 'colaPorPerder', 'textoEnvio', 'avisoEnvioGratis'];
+const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete', 'unaALaVez', 'colaPorPerder', 'colaParaGuardar', 'colaRestaurada', 'gtinValidoApp', 'gtinDeLectura', 'acumularLectura', 'textoEnvio', 'avisoEnvioGratis'];
 const front = new Function(`${bloqueCompartido.slice(bloqueCompartido.indexOf('*/') + 2)}\nreturn { ${NOMBRES_COMPARTIDOS.join(', ')} };`)();
 const IMPLEMENTACIONES = {
   worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete },
@@ -1691,6 +1691,277 @@ await testA('Worker: con más de 30 ítems publicados, las visitas se piden solo
   } finally {
     globalThis.fetch = fetchOriginal;
   }
+});
+
+/* ---------- cola persistente (front) ---------- */
+
+test('cola persistente: colaParaGuardar / colaRestaurada, ida y vuelta, y descarta lo inválido sin romper', () => {
+  const foto = n => ({ dataUrl: `data:image/jpeg;base64,AAA${n}`, extra: 'no se guarda' });
+  const cola = [
+    { numero: 1, thumb: 't1', estado: 'pendiente', fotos: [foto(1), foto(2)] },
+    { numero: 2, thumb: 't2', estado: 'armando', fotos: [foto(3)] },
+    { numero: 3, thumb: 't3', estado: 'error', error: 'No se pudo armar: x', fotos: [foto(4)] },
+    { numero: 4, thumb: 't4', estado: 'lista', id: 'reg4', titulo: 'Taladro', visto: true, fotos: [foto(5)] }
+  ];
+  const g = front.colaParaGuardar(cola);
+  assert.deepEqual(g.map(x => x.estado), ['pendiente', 'pendiente', 'error', 'lista'], 'armando vuelve a pendiente');
+  assert.equal(g[3].fotos, undefined, 'la lista no guarda fotos (ya están en su borrador)');
+  assert.deepEqual(g[0].fotos, [{ dataUrl: 'data:image/jpeg;base64,AAA1' }, { dataUrl: 'data:image/jpeg;base64,AAA2' }], 'solo dataUrl');
+  assert.equal(cola[1].estado, 'armando', 'no muta la cola original');
+  const r = front.colaRestaurada(JSON.parse(JSON.stringify(g)));
+  assert.deepEqual(r.map(x => [x.numero, x.estado]), [[1, 'pendiente'], [2, 'pendiente'], [3, 'error'], [4, 'lista']]);
+  assert.equal(r[0].fotos.length, 2);
+  assert.equal(r[2].error, 'No se pudo armar: x');
+  assert.deepEqual([r[3].id, r[3].titulo, r[3].visto, r[3].fotos], ['reg4', 'Taladro', true, []]);
+  assert.deepEqual(front.colaRestaurada(null), []);
+  assert.deepEqual(front.colaRestaurada('x'), []);
+  const raro = front.colaRestaurada([null, 5, { estado: 'armando', numero: 1, fotos: [{ dataUrl: 'data:image/png;base64,A' }] }, { estado: 'pendiente', numero: 'x', fotos: [] },
+    { estado: 'pendiente', numero: 2, fotos: [] }, { estado: 'pendiente', numero: 3, fotos: [{ dataUrl: 'http://otra' }, { dataUrl: 42 }] },
+    { estado: 'lista', numero: 4 }, { estado: 'pendiente', numero: 5, fotos: [{ dataUrl: 'data:image/png;base64,B' }], thumb: 7 }]);
+  assert.deepEqual(raro.map(x => x.numero), [5]);
+  assert.equal(raro[0].thumb, '');
+  const muchas = Array.from({ length: 15 }, (_, i) => ({ numero: i + 1, estado: 'pendiente', fotos: [{ dataUrl: 'data:image/png;base64,A' }] }));
+  assert.equal(front.colaRestaurada(muchas).length, 10);
+  assert.equal(front.colaRestaurada(muchas, 3).length, 3);
+  assert.equal(front.colaParaGuardar(muchas, 4).length, 4);
+  assert.deepEqual(front.colaParaGuardar(null), []);
+});
+
+/* ---------- variantes con color y fotos propias ---------- */
+
+test('limpiarVariantes con color y fotos: talle + color como clave, índices de fotos, solo color, y errores claros', () => {
+  assert.deepEqual(limpiarVariantes([{ talle: '40', color: 'Rojo', fotos: [2, 0, 2] }, { talle: '40', color: 'Azul' }, { talle: '40', color: ' rojo ' }, { color: 'Verde', cantidad: '2' }, { talle: ' ', color: ' ' }]),
+    [{ talle: '40', color: 'Rojo', fotos: [0, 2] }, { talle: '40', color: 'Azul' }, { color: 'Verde', cantidad: 2 }],
+    'el mismo talle con otro color es otra variante; el mismo talle y color (sin importar mayúsculas) no se repite');
+  assert.deepEqual(limpiarVariantes([{ talle: '41', fotos: [] }, { talle: '42', fotos: null }]), [{ talle: '41' }, { talle: '42' }], 'fotos vacías = todas');
+  for (const malo of [[-1], [1.5], ['a'], [100], [0, 'x']]) assert.throws(() => limpiarVariantes([{ talle: '40', fotos: malo }]), /fotos del talle 40/, JSON.stringify(malo));
+  assert.throws(() => limpiarVariantes([{ color: 'Rojo', cantidad: 0 }]), /cantidad del color Rojo/);
+  assert.throws(() => limpiarVariantes([{ talle: '40', color: 'Rojo', precio: -1 }]), /precio del talle 40 · Rojo/);
+  const grilla = ['38', '39', '40', '41'].flatMap(t => ['Rojo', 'Azul', 'Verde'].map(color => ({ talle: t, color })));
+  assert.equal(limpiarVariantes(grilla).length, 12);
+  assert.throws(() => limpiarVariantes([...grilla, { talle: '42', color: 'Rojo' }]), /máximo es 12/);
+});
+
+test('etiquetaVariante / fotosDeVariante / conVariante con color: nombres, subconjunto de fotos y atributos', () => {
+  assert.equal(etiquetaVariante({ talle: '40' }), 'talle 40');
+  assert.equal(etiquetaVariante({ color: 'Rojo' }), 'color Rojo');
+  assert.equal(etiquetaVariante({ talle: '40', color: 'Rojo' }), 'talle 40 · Rojo');
+  const fotos = ['a', 'b', 'c'];
+  assert.equal(fotosDeVariante(fotos, { talle: '40' }), fotos, 'sin fotos propias: todas');
+  assert.deepEqual(fotosDeVariante(fotos, { talle: '40', fotos: [0, 2] }), ['a', 'c']);
+  assert.throws(() => fotosDeVariante(fotos, { talle: '40', fotos: [3] }), /La foto 4 de talle 40 no existe: la publicación tiene 3/);
+  const base = { titulo: 'Zapas', talles: [{ talle: '40' }], atributos: [{ id: 'SIZE', valor: '', opciones: [] }, { id: 'COLOR', valor: 'Negro', opciones: [{ id: '1', nombre: 'Negro' }], nombre: 'Color' }, { id: 'BRAND', valor: 'X' }] };
+  const a = conVariante(base, { talle: '40', color: 'Rojo' });
+  assert.equal(a.atributos.find(x => x.id === 'SIZE').valor, '40');
+  assert.equal(a.atributos.filter(x => x.id === 'COLOR').length, 1);
+  assert.equal(a.atributos.find(x => x.id === 'COLOR').valor, 'Rojo');
+  assert.equal(a.atributos.find(x => x.id === 'COLOR').nombre, 'Color', 'conserva la definición del atributo');
+  assert.equal(a.atributos.find(x => x.id === 'BRAND').valor, 'X');
+  const b = conVariante(base, { color: 'Azul' });
+  assert.equal(b.atributos.find(x => x.id === 'SIZE').valor, '', 'solo color: no toca SIZE');
+  assert.equal(b.atributos.find(x => x.id === 'COLOR').valor, 'Azul');
+  const c = conVariante({ titulo: 'X', atributos: [] }, { color: 'Rojo' });
+  assert.deepEqual(c.atributos.map(x => [x.id, x.valor]), [['COLOR', 'Rojo']]);
+  assert.equal(base.atributos[1].valor, 'Negro', 'no muta la original');
+  assert.deepEqual(base.talles, [{ talle: '40' }]);
+});
+
+await testA('Worker: cada variante lleva su color, su talle con fila de guía y solo sus fotos; solo-color anda sin guía; foto inexistente frena todo', async () => {
+  const { default: worker } = await import('./worker.js');
+  const zap = contrato.casos.find(x => x.categoria.id === 'MLA109027');
+  const tal = contrato.casos.find(x => x.categoria.id === 'MLA5232');
+  const llamadas = [];
+  const validados = [];
+  const creados = [];
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    llamadas.push(`${init.method || 'GET'} ${ruta}`);
+    const r = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (ruta === '/users/me') return r(200, { id: 77, nickname: 'prueba', tags: ['user_product_seller'] });
+    if (ruta === '/categories/MLA109027/attributes') return r(200, zap.atributos);
+    if (ruta === '/categories/MLA109027') return r(200, zap.categoria);
+    if (ruta === '/categories/MLA5232/attributes') return r(200, tal.atributos);
+    if (ruta.startsWith('/sites/MLA/domain_discovery/search')) return r(200, zap.discovery);
+    if (ruta === '/catalog/charts/search') return r(200, { charts: [{ id: '426238', type: 'STANDARD', names: { MLA: 'Standard' } }] });
+    if (ruta === '/catalog/charts/426238') return r(200, guiaFalsa());
+    if (ruta === '/items/validate') { validados.push(JSON.parse(init.body)); return r(200, {}); }
+    if (ruta === '/items') { creados.push(JSON.parse(init.body)); return r(201, { id: `MLA77700${creados.length}`, permalink: 'p', status: 'active' }); }
+    if (ruta.endsWith('/description')) return r(201, {});
+    return r(404, { message: `ruta no simulada: ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 77, vence: Date.now() + 3600e3 }));
+    const env = { KV: kv, APP_SECRET: 'secreto' };
+    const llamar = async (ruta, cuerpo) => {
+      const res = await worker.fetch(new Request(`https://w.test${ruta}`, { method: 'POST', body: JSON.stringify(cuerpo),
+        headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto', 'content-type': 'application/json' } }), env);
+      return { status: res.status, ...(await res.json()) };
+    };
+    const fotos = [{ id: 'f1' }, { id: 'f2' }, { id: 'f3' }];
+    const zapCuerpo = variantes => ({ fotos, publicacion: { titulo: 'Zapatillas running', categoria: 'MLA109027', precio: 30000, condicion: 'usado', cantidad: 1, tipoPublicacion: 'gold_special',
+      envio: 'retiro', descripcion: 'Casi nuevas', talles: variantes,
+      atributos: [{ id: 'SIZE', valor: '', opciones: [] }, { id: 'COLOR', valor: '', opciones: [] }, { id: 'GENDER', valor: 'Hombre', opciones: [] }, { id: 'BRAND', valor: 'Adidas', opciones: [] }] } });
+    const attr = (it, id) => it.attributes.find(a => a.id === id)?.value_name;
+    const fotosDe = it => it.pictures.map(p => p.id);
+
+    const variantes = [{ talle: '40', color: 'Rojo', fotos: [0] }, { talle: '40', color: 'Azul', fotos: [1, 2] }, { talle: '41', color: 'Rojo' }];
+    let r = await llamar('/api/revisar', zapCuerpo(variantes));
+    assert.equal(r.ok, true, JSON.stringify(r.errores));
+    assert.deepEqual(validados.map(it => [attr(it, 'SIZE'), attr(it, 'COLOR'), fotosDe(it)]), [['40 AR', 'Rojo', ['f1']], ['40 AR', 'Azul', ['f2', 'f3']], ['41 AR', 'Rojo', ['f1', 'f2', 'f3']]]);
+    assert.deepEqual(validados.map(it => attr(it, 'SIZE_GRID_ROW_ID')), ['426238:1', '426238:1', '426238:2']);
+    assert.deepEqual(r.porTalle.map(t => [t.talle, t.color, t.ok]), [['40', 'Rojo', true], ['40', 'Azul', true], ['41', 'Rojo', true]]);
+    r = await llamar('/api/publicar', zapCuerpo(variantes));
+    assert.equal(r.status, 200);
+    assert.deepEqual(creados.map(it => [attr(it, 'COLOR'), fotosDe(it)]), [['Rojo', ['f1']], ['Azul', ['f2', 'f3']], ['Rojo', ['f1', 'f2', 'f3']]]);
+    assert.deepEqual(r.items.map(i => [i.talle, i.color]), [['40', 'Rojo'], ['40', 'Azul'], ['41', 'Rojo']]);
+
+    validados.length = 0;
+    r = await llamar('/api/revisar', zapCuerpo([{ talle: '99', color: 'Rojo' }, { talle: '40', color: 'Azul' }]));
+    assert.equal(r.ok, false);
+    assert.match(r.errores[0], /^Talle 99 · Rojo: El talle «99» no está en la guía/);
+
+    const antes = llamadas.filter(l => l === 'POST /items/validate').length;
+    r = await llamar('/api/revisar', zapCuerpo([{ talle: '40', color: 'Rojo', fotos: [5] }]));
+    assert.equal(r.status, 400);
+    assert.match(r.error, /La foto 6 de talle 40 · Rojo no existe: la publicación tiene 3/);
+    assert.equal(llamadas.filter(l => l === 'POST /items/validate').length, antes);
+    // la foto inexistente en la SEGUNDA variante también frena antes de validar la primera
+    r = await llamar('/api/revisar', zapCuerpo([{ talle: '40', color: 'Rojo' }, { talle: '41', color: 'Rojo', fotos: [9] }]));
+    assert.equal(r.status, 400);
+    assert.equal(llamadas.filter(l => l === 'POST /items/validate').length, antes, 'no se validó ni la primera');
+    r = await llamar('/api/publicar', zapCuerpo([{ talle: '40', color: 'Rojo' }, { talle: '41', color: 'Rojo', fotos: [9] }]));
+    assert.equal(r.status, 400);
+    assert.equal(creados.length, 3, 'y no se publicó nada nuevo');
+
+    validados.length = 0;
+    creados.length = 0;
+    const buscadas = llamadas.filter(l => l === 'POST /catalog/charts/search').length;
+    const taladro = variantes => ({ fotos, publicacion: { titulo: 'Taladro percutor', categoria: 'MLA5232', precio: 45000, condicion: 'usado', cantidad: 2, tipoPublicacion: 'gold_special',
+      envio: 'retiro', descripcion: 'Anda bien', talles: variantes, atributos: [{ id: 'COLOR', valor: '', opciones: [] }] } });
+    const solo = [{ color: 'Naranja', cantidad: 3 }, { color: 'Negro', fotos: [1] }];
+    r = await llamar('/api/revisar', taladro(solo));
+    assert.equal(r.ok, true, JSON.stringify(r.errores));
+    assert.deepEqual(validados.map(it => [attr(it, 'COLOR'), it.available_quantity, fotosDe(it)]), [['Naranja', 3, ['f1', 'f2', 'f3']], ['Negro', 2, ['f2']]]);
+    assert.equal(llamadas.filter(l => l === 'POST /catalog/charts/search').length, buscadas, 'sin SIZE no se busca guía');
+    r = await llamar('/api/publicar', taladro(solo));
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.items.map(i => [i.talle, i.color]), [[null, 'Naranja'], [null, 'Negro']]);
+    assert.equal(creados.length, 2);
+    assert.ok(!llamadas.some(l => /^(POST|PUT|DELETE|PATCH) \/catalog\/charts(?!\/search)/.test(l)));
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+});
+
+test('resumenRegistro guarda el color de cada ítem publicado (y nada si no hay)', () => {
+  const r = resumenRegistro({ id: 'b', estado: 'publicada', ml: { id: 'MLA1', items: [{ talle: '40', color: 'Rojo', id: 'MLA1' }, { talle: null, color: 'Azul', id: 'MLA2' }, { talle: '41', id: 'MLA3' }] } });
+  assert.deepEqual(r.mlItems, [{ talle: '40', color: 'Rojo', id: 'MLA1' }, { talle: null, color: 'Azul', id: 'MLA2' }, { talle: '41', id: 'MLA3' }]);
+});
+
+/* ---------- atributos condicionales ---------- */
+
+test('leerCondicionales: entiende las formas razonables y descarta lo que no parece un id de atributo', () => {
+  assert.deepEqual(leerCondicionales({ required_attributes: [{ id: 'GTIN' }, { id: 'MODEL' }, 'BRAND'] }), ['GTIN', 'MODEL', 'BRAND']);
+  assert.deepEqual(leerCondicionales({ attributes: [{ id: 'SIZE', name: 'Talle' }] }), ['SIZE']);
+  assert.deepEqual(leerCondicionales({ conditional_required: ['COLOR', 'COLOR', 'EMPTY_GTIN_REASON'] }), ['COLOR', 'EMPTY_GTIN_REASON'], 'sin repetidos');
+  assert.deepEqual(leerCondicionales([{ id: 'GENDER' }, 'MAIN_COLOR']), ['GENDER', 'MAIN_COLOR']);
+  for (const raro of [null, undefined, 'x', 42, {}, { required_attributes: 'GTIN' }, { attributes: [null, 5, {}, { id: 7 }, { id: 'minuscula' }, { id: 'CON ESPACIO' }, '', 'A'] }])
+    assert.deepEqual(leerCondicionales(raro), [], JSON.stringify(raro));
+});
+
+await testA('Worker: /api/condicionales consulta a ML solo para leer, tolera cualquier fallo y no vuelve a preguntar si no existe', async () => {
+  const { default: worker } = await import('./worker.js');
+  const llamadas = [];
+  const cuerpos = [];
+  let respuesta = { status: 200, cuerpo: { required_attributes: [{ id: 'GTIN' }, { id: 'MODEL' }] } };
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    const ruta = String(url).replace('https://api.mercadolibre.com', '');
+    llamadas.push(`${init.method || 'GET'} ${ruta}`);
+    if (init.body) cuerpos.push(JSON.parse(init.body));
+    const r = (status, cuerpo) => new Response(JSON.stringify(cuerpo), { status, headers: { 'content-type': 'application/json' } });
+    if (ruta === '/categories/MLA5232/attributes/conditional') return r(respuesta.status, respuesta.cuerpo);
+    if (ruta === '/categories/MLA777/attributes/conditional') return r(404, { message: 'no existe' });
+    return r(404, { message: `ruta no simulada: ${ruta}` });
+  };
+  try {
+    const kv = fakeKV();
+    await kv.put('ml:tokens', JSON.stringify({ access_token: 't', refresh_token: 'r', user_id: 1, vence: Date.now() + 3600e3 }));
+    const env = { KV: kv, APP_SECRET: 'secreto' };
+    const llamar = async cuerpo => {
+      const res = await worker.fetch(new Request('https://w.test/api/condicionales', { method: 'POST', body: JSON.stringify(cuerpo),
+        headers: { origin: 'http://localhost:5610', 'x-clave': 'secreto', 'content-type': 'application/json' } }), env);
+      return { status: res.status, ...(await res.json()) };
+    };
+    const atributos = [{ id: 'BRAND', valor: 'Black+Decker', opciones: [] }, { id: 'COLOR', valor: 'naranja', opciones: [{ id: '52005', nombre: 'Naranja' }] }, { id: 'MODEL', valor: '  ', opciones: [] }];
+
+    let r = await llamar({ categoria: 'MLA5232', atributos });
+    assert.equal(r.status, 200);
+    assert.deepEqual([r.disponible, r.requeridos], [true, ['GTIN', 'MODEL']]);
+    assert.deepEqual(cuerpos[0], { attributes: [{ id: 'BRAND', value_name: 'Black+Decker' }, { id: 'COLOR', value_id: '52005', value_name: 'Naranja' }] }, 'solo lo cargado, con el id de la opción');
+    // un 400 o un 500 de ML: disponible false, sin error, y se vuelve a preguntar la próxima
+    for (const status of [400, 403, 429, 500]) {
+      respuesta = { status, cuerpo: { message: 'x' } };
+      r = await llamar({ categoria: 'MLA5232', atributos });
+      assert.deepEqual([r.status, r.disponible, r.requeridos], [200, false, []], `status ${status}`);
+    }
+    respuesta = { status: 200, cuerpo: { required_attributes: [{ id: 'SIZE' }] } };
+    assert.deepEqual((await llamar({ categoria: 'MLA5232', atributos })).requeridos, ['SIZE'], 'tras un fallo pasajero sigue preguntando');
+    // un 404 (no existe para esa categoría): se recuerda y no se vuelve a llamar
+    r = await llamar({ categoria: 'MLA777', atributos });
+    assert.deepEqual([r.disponible, r.estado], [false, 404]);
+    const antes = llamadas.length;
+    r = await llamar({ categoria: 'MLA777', atributos });
+    assert.equal(r.disponible, false);
+    assert.equal(llamadas.length, antes, 'no vuelve a preguntar');
+    // categoría inválida: 400 y no llama a nadie
+    r = await llamar({ categoria: '../etc', atributos });
+    assert.equal(r.status, 400);
+    assert.equal(llamadas.length, antes);
+    // todo lo que se llamó es a ese endpoint (solo lectura de reglas: nada más)
+    assert.ok(llamadas.every(l => /^POST \/categories\/MLA(5232|777)\/attributes\/conditional$/.test(l)), llamadas.join(' | '));
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+});
+
+/* ---------- escáner de código de barras (parte pura del front) ---------- */
+
+test('gtinValidoApp (front) responde igual que gtinValido (Worker) y gtinDeLectura limpia lo leído', () => {
+  const casos = ['7790895000997', '036000291452', '96385074', '779 0895 000997', '7790895000998', '12345', '', null, undefined, '7790895-000997', '00012345678905', '123456789012345', 'abcdefgh', '7790895000997x'];
+  let semilla = 12345;
+  const azar = () => (semilla = (semilla * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (const largo of [8, 12, 13, 14]) for (let i = 0; i < 300; i++) casos.push(Array.from({ length: largo }, () => Math.floor(azar() * 10)).join(''));
+  for (const c of casos) assert.equal(front.gtinValidoApp(c), gtinValido(c), `caso ${c}`);
+  assert.equal(front.gtinDeLectura(' 7790895000997 '), '7790895000997');
+  assert.equal(front.gtinDeLectura('779 0895 000997'), '7790895000997');
+  assert.equal(front.gtinDeLectura('7790895000998'), '');
+  assert.equal(front.gtinDeLectura('hola'), '');
+  assert.equal(front.gtinDeLectura(null), '');
+});
+
+test('acumularLectura: vale con 2 lecturas seguidas iguales y válidas; una inválida o distinta corta la racha', () => {
+  const a = front.acumularLectura;
+  let e = a(null, '7790895000997');
+  assert.deepEqual(e, { ultimo: '7790895000997', veces: 1, listo: '' }, 'una sola no alcanza');
+  e = a(e, '7790895000997');
+  assert.deepEqual(e, { ultimo: '7790895000997', veces: 2, listo: '7790895000997' });
+  e = a(e, '7790895000997');
+  assert.equal(e.listo, '7790895000997', 'sigue valiendo');
+  // una lectura inválida en el medio corta la racha
+  e = a(a(null, '7790895000997'), '7790895000998');
+  assert.deepEqual(e, { ultimo: '', veces: 0, listo: '' });
+  e = a(e, '7790895000997');
+  assert.equal(e.listo, '', 'vuelve a empezar');
+  // otro código válido distinto: arranca de nuevo en 1
+  e = a(a(null, '7790895000997'), '036000291452');
+  assert.deepEqual(e, { ultimo: '036000291452', veces: 1, listo: '' });
+  // se puede pedir otro número de lecturas
+  assert.equal(a(a(null, '96385074', 3), '96385074', 3).listo, '');
+  assert.equal(a(a(a(null, '96385074', 3), '96385074', 3), '96385074', 3).listo, '96385074');
+  assert.deepEqual(a(undefined, 'xx'), { ultimo: '', veces: 0, listo: '' });
 });
 
 console.log(`\n${n} tests en verde`);

@@ -33,6 +33,7 @@ La doc bloquea fetchers con 403; se baja con `curl -A "Mozilla/5.0 ..."`.
 - Descripción: `POST /items/{id}/description` con `{ "plain_text": "..." }`, después de crear el ítem. Solo texto plano: nada de HTML ni emojis.
 - **Varios talles**: con User Products el arreglo `variations` da error. Cada talle es un ítem propio (mismo `family_name`, `SIZE` y `SIZE_GRID_ROW_ID` distintos, mismo `SIZE_GRID_ID`). La guía se busca una sola vez por publicación.
 - **Editar**: `PUT /items/{id}` con `{ available_quantity }` o `{ price }`; descripción con `PUT /items/{id}/description?api_version=2` (si nunca tuvo, 404 y se crea con `POST`). Sin validar contra la cuenta real: solo ML simulado en `worker/test.mjs`.
+- **Atributos condicionales**: la documentación solo confirma la etiqueta `conditional_required` (y `new_required` para ítems nuevos) en `GET /categories/{id}/attributes`. La app además prueba `POST /categories/{id}/attributes/conditional` con `{ attributes: [{id, value_id?, value_name}] }` y espera algo como `{ required_attributes: [{ id }] }`; **contrato sin confirmar**, parser tolerante (`leerCondicionales`) y apagado automático si da 404/405. Sonda: `tools/probar-condicionales.mjs`.
 - **Validador**: `POST /items/validate` con el mismo cuerpo revisa todo **sin publicar**. Es lo que usa el botón "Revisar".
 
 ## Precio

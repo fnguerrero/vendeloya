@@ -85,6 +85,24 @@ export function atributoParaML(attr, valor) {
   return match ? { id: attr.id, value_id: match.id, value_name: match.nombre } : { id: attr.id, value_name: texto };
 }
 
+/**
+ * Los ids de atributos que MercadoLibre dice que pasan a ser obligatorios según lo ya cargado
+ * (respuesta de POST /categories/{id}/attributes/conditional). El contrato no está confirmado en la documentación:
+ * se entienden las formas razonables ({ required_attributes: [...] }, { attributes: [...] }, { conditional_required: [...] },
+ * o una lista suelta; cada elemento un id o un objeto con `id`) y todo lo que no parezca un id de atributo se descarta.
+ */
+export function leerCondicionales(datos) {
+  const lista = Array.isArray(datos) ? datos
+    : datos && typeof datos === 'object' ? (datos.required_attributes || datos.conditional_required || datos.attributes || datos.required || []) : [];
+  if (!Array.isArray(lista)) return [];
+  const ids = [];
+  for (const x of lista) {
+    const id = typeof x === 'string' ? x : x && typeof x === 'object' ? x.id : null;
+    if (typeof id === 'string' && /^[A-Z][A-Z0-9_]{1,59}$/.test(id) && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
+}
+
 /** Recorta el título al largo de la categoría sin cortar una palabra al medio. */
 export function recortarTitulo(titulo, max = 60) {
   const t = String(titulo || '').replace(/\s+/g, ' ').trim();
@@ -140,32 +158,43 @@ export function limpiarTalles(entrada) {
 }
 
 /**
- * Las variantes a publicar: una por talle, cada una con su cantidad y su precio si difieren de los comunes.
- * Acepta talles sueltos ("40" o "40, 41") y/o objetos { talle, cantidad?, precio? }. Sin repetidos (por talle),
- * en orden, hasta MAX_TALLES. Cantidad: entero de 1 a 999999. Precio: número mayor a cero (se redondea).
+ * Las variantes a publicar: una por talle y/o color, cada una con su cantidad, su precio y sus fotos si difieren de los comunes.
+ * Acepta talles sueltos ("40" o "40, 41") y/o objetos { talle?, color?, cantidad?, precio?, fotos? }. Hace falta talle o color.
+ * Sin repetidos (por talle + color), en orden, hasta MAX_TALLES. Cantidad: entero de 1 a 999999. Precio: número mayor a
+ * cero (se redondea). Fotos: índices (0, 1, 2…) de la tira de fotos de la publicación; vacío = todas.
  * Lo que viene vacío no se incluye: esa variante usa el valor común de la publicación.
  */
 export function limpiarVariantes(entrada) {
   const crudo = Array.isArray(entrada) ? entrada : String(entrada ?? '').split(/[,;\n]/);
   const vistos = new Set();
   const lista = [];
+  const limpio = z => String(z ?? '').replace(/\s+/g, ' ').trim();
+  const vacio = z => z === undefined || z === null || String(z).trim() === '';
   for (const x of crudo) {
     const obj = x && typeof x === 'object' ? x : { talle: x };
-    const talle = String(obj.talle ?? '').replace(/\s+/g, ' ').trim();
-    const clave = talle.toLowerCase();
-    if (!talle || vistos.has(clave)) continue;
+    const talle = limpio(obj.talle);
+    const color = limpio(obj.color);
+    if (!talle && !color) continue;
+    const clave = `${talle.toLowerCase()}|${color.toLowerCase()}`;
+    if (vistos.has(clave)) continue;
     vistos.add(clave);
-    const v = { talle };
-    const vacio = z => z === undefined || z === null || String(z).trim() === '';
+    const nombre = etiquetaVariante({ talle, color });
+    const v = {};
+    if (talle) v.talle = talle;
+    if (color) v.color = color;
     if (!vacio(obj.cantidad)) {
       const c = Number(obj.cantidad);
-      if (!Number.isInteger(c) || c < 1 || c > 999999) throw err400(`La cantidad del talle ${talle} tiene que ser un entero de 1 a 999999.`);
+      if (!Number.isInteger(c) || c < 1 || c > 999999) throw err400(`La cantidad del ${nombre} tiene que ser un entero de 1 a 999999.`);
       v.cantidad = c;
     }
     if (!vacio(obj.precio)) {
-      const p = Math.round(Number(obj.precio));
-      if (!Number.isFinite(p) || p <= 0) throw err400(`El precio del talle ${talle} tiene que ser un número mayor a cero.`);
-      v.precio = p;
+      const pr = Math.round(Number(obj.precio));
+      if (!Number.isFinite(pr) || pr <= 0) throw err400(`El precio del ${nombre} tiene que ser un número mayor a cero.`);
+      v.precio = pr;
+    }
+    if (Array.isArray(obj.fotos) && obj.fotos.length) {
+      if (!obj.fotos.every(i => Number.isInteger(i) && i >= 0 && i < 100)) throw err400(`Las fotos del ${nombre} no son válidas.`);
+      v.fotos = [...new Set(obj.fotos)].sort((a, b) => a - b);
     }
     lista.push(v);
   }
@@ -173,9 +202,28 @@ export function limpiarVariantes(entrada) {
   return lista;
 }
 
-/** La publicación de una variante: su talle, y su cantidad y precio si los tiene. No muta la original. */
+/** Cómo se nombra una variante: «talle 40», «color Rojo» o «talle 40 · Rojo». */
+export function etiquetaVariante(v) {
+  if (v.talle && v.color) return `talle ${v.talle} · ${v.color}`;
+  return v.talle ? `talle ${v.talle}` : `color ${v.color}`;
+}
+
+/** Las fotos (ids) que usa una variante: las suyas por índice, o todas. Tira 400 si pide una foto que no existe. */
+export function fotosDeVariante(fotos, v) {
+  if (!v.fotos?.length) return fotos;
+  const mala = v.fotos.find(i => i >= fotos.length);
+  if (mala !== undefined) throw err400(`La foto ${mala + 1} de ${etiquetaVariante(v)} no existe: la publicación tiene ${fotos.length}.`);
+  return v.fotos.map(i => fotos[i]);
+}
+
+/** La publicación de una variante: su talle (con SIZE), su color (COLOR), y su cantidad y precio si los tiene. No muta la original. */
 export function conVariante(p, v) {
-  const q = conTalle(p, v.talle);
+  const { talles, ...sin } = p;
+  let q = v.talle ? conTalle(sin, v.talle) : { ...sin, atributos: [...(sin.atributos || [])] };
+  if (v.color) {
+    const color = q.atributos.find(a => a.id === 'COLOR') || { id: 'COLOR', nombre: 'Color', opciones: [] };
+    q = { ...q, atributos: [...q.atributos.filter(a => a.id !== 'COLOR'), { ...color, valor: v.color }] };
+  }
   if (v.cantidad !== undefined) q.cantidad = v.cantidad;
   if (v.precio !== undefined) q.precio = v.precio;
   return q;
@@ -402,7 +450,7 @@ export function resumenRegistro(reg) {
     permalink: reg.ml?.permalink || '',
     mlId: reg.ml?.id || null,
     // Varios talles: un ítem de ML por talle. Solo se guarda cuando hay más de uno (los índices viejos no lo traen).
-    ...(reg.ml?.items?.length > 1 ? { mlItems: reg.ml.items.filter(i => i?.id).map(i => ({ talle: i.talle ?? null, id: i.id })) } : {})
+    ...(reg.ml?.items?.length > 1 ? { mlItems: reg.ml.items.filter(i => i?.id).map(i => ({ talle: i.talle ?? null, ...(i.color ? { color: i.color } : {}), id: i.id })) } : {})
   };
 }
 

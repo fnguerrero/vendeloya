@@ -1,10 +1,13 @@
-# TODO — ronda 6
+# TODO — ronda 7
 
-- [x] 1. Lógica pura: `limpiarTalles`, `cambioPublicacion` con `stock`, `validarDescripcion`; ganchos en el demo para probar sin red · verif: tests nuevos en `test.mjs` (criterios 1 y 2)
-- [x] 2. Worker revisar con varios talles (`revisarTalles`, guía una sola vez, `porTalle`) · verif: test con ML simulado (criterios 3 y 4)
-- [x] 3. Worker publicar con varios talles (items, fallaron, 412 sin revisar) · verif: test con ML simulado (criterios 5 y 6)
-- [x] 4. Worker editar: `descripcion` (PUT, respaldo POST) y `stock` en `/api/publicaciones/<id>` · verif: test con ML simulado (criterio 7)
-- [x] 5. Mutantes de lo nuevo · verif: todos mueren con `mutantes.mjs` ampliado (criterio 8)
-- [x] 6. App: campo "Talles a publicar", `leerPublicacion`, `pendientes`, revisión y confirmación por talle, listo con links · verif: `?demo` por JS (criterio 9)
-- [x] 7. App: panel de la publicada con otros talles y editar descripción y stock (demo simula) · verif: `?demo` por JS (criterio 10)
-- [x] 8. Cierre: VERSION/`?v=`, README/NOTAS-API, consola, celu 375, tests, commit, INFORME y REVISION.html · verif: criterio 11 y 12
+- [x] 1. Cola: helpers puros `colaParaGuardar` / `colaRestaurada` en el bloque compartido de app.js · verif: tests nuevos (criterio 1)
+- [x] 2. Cola: guardado en IndexedDB (con fallback), carga al arrancar, aviso nuevo, `beforeunload` solo si no se pudo guardar · verif: `?demo` por JS (criterio 2)
+- [x] 3. Variantes con color y fotos: `limpiarVariantes`, `conVariante`, etiqueta · verif: tests puros + mutantes (criterio 3)
+- [x] 4. Worker revisar/publicar con color y fotos por variante, y solo-color sin guía · verif: test con ML simulado (criterios 3 y 4)
+- [x] 5. App: columna de color y fotos por fila, confirmación, listo y panel con "Talle · Color", demo · verif: `?demo&moda` por JS (criterio 5)
+- [x] 6. Condicionales: `leerCondicionales` + `/api/condicionales` + `tools/probar-condicionales.mjs` · verif: tests con formas de respuesta y ML simulado (criterio 6)
+- [x] 7. Condicionales en la app: consulta con pausa, aviso y campo obligatorio, demo · verif: `?demo` por JS (criterio 7)
+- [x] 8. Escáner: `gtinFront` en el bloque compartido y tests contra `gtinValido` · verif: tests (criterio 8, parte pura)
+- [x] 9. Escáner: botón, diálogo con cámara, lectura confirmada en 2 cuadros, apagado, mensaje sin soporte · verif: `?demo` con `BarcodeDetector` y `getUserMedia` simulados (criterio 8)
+- [x] 10. Mutantes de todo lo nuevo · verif: todos mueren (criterio 9)
+- [ ] 11. Cierre: versiones, README/NOTAS-API, consola, 375 px, tests, `--seco`, commit, push, intento de deploy, INFORME y REVISION.html · verif: criterio 10

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VendeloYa · ronda 6</title>
+<style>
+  :root { --fondo:#f2f2f2; --tarjeta:#fff; --texto:#1b1b1b; --suave:#666; --borde:#ddd; --ok:#1e8e3e; --aviso:#b26a00; --acento:#2d6cdf; }
+  @media (prefers-color-scheme: dark) { :root { --fondo:#121212; --tarjeta:#1e1e1e; --texto:#eee; --suave:#a0a0a0; --borde:#333; --ok:#5bd17d; --aviso:#f0b050; --acento:#7aa7ff; } }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:16px; background:var(--fondo); color:var(--texto); font:16px/1.5 system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 8px 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  p, li { margin: 4px 0; }
+  .tarjeta { background:var(--tarjeta); border:1px solid var(--borde); border-radius:12px; padding:14px 16px; margin:12px 0; }
+  .sub { color:var(--suave); margin:0 0 8px; }
+  .num { font-size: 1.6rem; font-weight: 700; color: var(--ok); }
+  .fila { display:flex; gap:12px; flex-wrap:wrap; }
+  .fila > div { flex:1 1 140px; }
+  .aviso { color: var(--aviso); font-weight: 600; }
+  code { background: var(--fondo); padding: 1px 6px; border-radius: 6px; font-size: .88em; word-break: break-word; }
+  ul { padding-left: 20px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>VendeloYa · ronda 6</h1>
+  <p class="sub">14/11/2026 · varios talles + editar lo publicado · 8 de 8 ítems en 8 iteraciones (presupuesto 30)</p>
+
+  <div class="tarjeta">
+    <h2>Resultado</h2>
+    <div class="fila">
+      <div><div class="num">76</div><div class="sub">tests en verde (10 nuevos)</div></div>
+      <div><div class="num">23</div><div class="sub">mutantes nuevos, todos muertos</div></div>
+      <div><div class="num">12</div><div class="sub">talles máximo por publicación</div></div>
+    </div>
+    <p class="aviso">Sin deploy: pide tu OK. No se tocó nada real en MercadoLibre.</p>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Qué cambió</h2>
+    <ul>
+      <li><b>Varios talles:</b> con tu cuenta de User Products ML no acepta <code>variations</code>, así que cada talle es una publicación propia (mismo <code>family_name</code>). El campo <b>"Talles a publicar"</b> aparece en ropa y calzado; un botón revisa y publica todos.</li>
+      <li><b>Revisión por talle:</b> cada uno va a <code>/items/validate</code> con su fila de la guía. Si uno falla, el error dice <i>«Talle 99: …»</i>. Si alguno no pasó la revisión, no sale ninguno.</li>
+      <li><b>Si ML rechaza uno al crear:</b> los otros salen y la pantalla dice cuál no salió y por qué.</li>
+      <li><b>Panel de la publicada:</b> lista los talles con su link y permite cambiar <b>stock</b> y <b>descripción</b> (además de precio, pausar y cerrar).</li>
+    </ul>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Cómo probarlo</h2>
+    <p>Demo local: <code>http://localhost:5610/?demo&amp;moda</code></p>
+    <p>Servidor: <code>py -3 -m http.server 5610 --directory "W:\Working Folder Personal\Apps\VendeloYa"</code></p>
+    <p>Probá <code>40, 41, 42</code>. El <code>99</code> da error de guía y el <code>44</code> simula un rechazo de ML al crear.</p>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Cómo deshacerlo</h2>
+    <p>Todo está en dos commits de <code>fnguerrero/vendeloya</code>: <code>git revert</code> de cada uno. Sin lista de talles la app y el Worker se comportan como antes.</p>
+  </div>
+
+  <div class="tarjeta">
+    <h2>Desvíos y lo que queda</h2>
+    <ul>
+      <li>Sin desvíos de alcance.</li>
+      <li class="aviso">Sin validar contra ML real: varios talles y editar stock/descripción se probaron con ML simulado. Falta tu deploy y una corrida real de <code>validar-lote</code> si querés confirmarlo.</li>
+      <li>El seguimiento (visitas y estado) cubre solo el primer talle.</li>
+      <li>El título no se edita (con User Products no se puede).</li>
+      <li>Deploy pendiente: Worker API y <code>vendeloya-app</code>.</li>
+    </ul>
+  </div>
+</main>
+</body>
+</html>

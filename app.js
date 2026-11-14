@@ -732,6 +732,7 @@ function mostrarRevision(r, guardada) {
   $('garantia').value = p.garantia || '';
   $('envio').value = p.envio ?? 'retiro';
   $('cantidad').value = p.cantidad || 1;
+  $('talles').value = (p.talles || []).join(', ');
   $('costo').value = montoTexto(p.costo);
   $('costo-envio').value = montoTexto(p.costoEnvio);
   avisarMontos();
@@ -1396,6 +1397,8 @@ function dibujarCategoria(categoria, atributosCrudos, tipoElegido) {
   const atributos = normalizarAtributos(atributosCrudos);
   estado.atributos = atributos;
   estado.categoria = categoria;
+  $('bloque-talles').hidden = !atributos.some(a => a.id === 'SIZE');   // solo ropa y calzado
+  pintarTalles();
   actualizarContador();
 
   const tipos = categoria.tiposPublicacion?.length ? categoria.tiposPublicacion : [{ id: 'gold_special', nombre: 'Clásica' }];
@@ -1453,7 +1456,9 @@ $('titulo').addEventListener('input', actualizarContador);
 function pendientes() {
   const max = estado.categoria?.maxTitulo || 60;
   const titulo = $('titulo').value.trim();
-  const faltan = [...$('paso-revision').querySelectorAll('.campo.requerido [data-id]')].filter(c => !c.value.trim());
+  // Con varios talles el "Talle" de arriba no hace falta: cada publicación toma el suyo de la lista.
+  const conLista = talleDeLista().length > 0;
+  const faltan = [...$('paso-revision').querySelectorAll('.campo.requerido [data-id]')].filter(c => !c.value.trim() && !(conLista && c.dataset.id === 'SIZE'));
   const items = [
     { ok: estado.fotos.length > 0, texto: `${estado.fotos.length || 'Sin'} foto${estado.fotos.length === 1 ? '' : 's'}` },
     { ok: !!titulo && titulo.length <= max, texto: titulo.length > max ? `Título largo (${titulo.length}/${max})` : 'Título', el: $('titulo') },
@@ -1461,6 +1466,7 @@ function pendientes() {
     { ok: precioActual() > 0, texto: precioActual() > 0 ? `Precio $ ${miles(precioActual())}` : 'Precio', el: $('precio') },
     { ok: !faltan.length, texto: faltan.length ? `Falta${faltan.length > 1 ? 'n' : ''} ${faltan.length} dato${faltan.length > 1 ? 's' : ''} obligatorio${faltan.length > 1 ? 's' : ''}` : 'Datos obligatorios', el: faltan[0] }
   ];
+  if (talleDeLista().length > MAX_TALLES) items.push({ ok: false, texto: `Demasiados talles (máximo ${MAX_TALLES})`, el: $('talles') });
   // Mercado Envíos calcula el costo con el peso y las medidas: sin ellos no se puede publicar así.
   if ($('envio').value === 'me2') { const v = validacionPaquete(); items.push({ ok: v.ok, texto: v.ok ? 'Peso y medidas del paquete' : `Paquete: ${v.errores[0]}`, el: $('paq-peso') }); }
   // MercadoLibre rechaza los datos de contacto: se avisa antes y frena el Publicar.
@@ -1542,6 +1548,7 @@ function tocado(e) {
   if (e?.target?.id === 'categoria') return; // la categoría guarda cuando llega su ficha
   if (estado.estadoReg === 'revisada') estado.estadoReg = 'borrador';
   if (['envio', 'cantidad', 'tipo'].includes(e?.target?.id)) resumirVenta();
+  if (e?.target?.id === 'talles') pintarTalles();
   if (String(e?.target?.id || '').startsWith('paq-')) pintarPaquete();
   pintarGanancia();
   if (['precio', 'tipo'].includes(e?.target?.id)) pedirComisiones();
@@ -1878,7 +1885,7 @@ $('listo-historial').addEventListener('click', () => {
 
 /* ---------- una publicación: precio, estado y preguntas ---------- */
 
-const pub = { reg: null, seg: null, preguntas: [] };
+const pub = { reg: null, seg: null, preguntas: [], ficha: null };
 
 async function abrirPublicacion(r) {
   pub.reg = r;
@@ -1888,9 +1895,27 @@ async function abrirPublicacion(r) {
   $('pub-ver').hidden = !r.permalink;
   $('pub-copiar').hidden = !r.permalink;
   $('pub-precio').value = miles(pub.seg?.precio || r.precio);
+  $('pub-stock').value = pub.seg?.disponibles ? String(pub.seg.disponibles) : '';
+  $('pub-descripcion').value = '';
+  $('pub-talles-caja').hidden = true;
+  pub.ficha = null;
   pintarPublicacion();
   $('pub').showModal();
+  cargarFichaDe(r.id);
   await cargarPreguntasDe(r.id);
+}
+
+/** Lo que el historial no trae: la descripción actual y los talles que salieron (del registro completo). Es un extra. */
+async function cargarFichaDe(registroId) {
+  try {
+    const reg = await api(`/api/registros/${encodeURIComponent(registroId)}`);
+    if (pub.reg?.id !== registroId) return;   // mientras tanto abrieron otra
+    pub.ficha = reg;
+    $('pub-descripcion').value = reg.publicacion?.descripcion || '';
+    const items = reg.ml?.items || [];
+    dibujarTalles($('pub-talles'), items);
+    $('pub-talles-caja').hidden = items.length < 2;
+  } catch { /* sin la ficha igual se puede cambiar precio, estado y stock */ }
 }
 
 function pintarPublicacion() {
@@ -1907,24 +1932,34 @@ function pintarPublicacion() {
   $('pub-vendida').hidden = cerrada;
   $('pub-cerrada').hidden = !cerrada;
   $('pub-republicar-caja').hidden = !cerrada;
-  $('pub-precio').disabled = cerrada;
-  $('pub-precio-guardar').disabled = cerrada;
+  for (const id of ['pub-precio', 'pub-precio-guardar', 'pub-stock', 'pub-stock-guardar', 'pub-descripcion', 'pub-descripcion-guardar']) $(id).disabled = cerrada;
 }
 
-/** Precio, pausar, reactivar o vendida: va a MercadoLibre y se refleja en el historial sin recargar. */
-async function accionPublicacion(accion, precio) {
+/** Precio, stock, descripción, pausar, reactivar o vendida: va a MercadoLibre y se refleja en el historial sin recargar. */
+async function accionPublicacion(accion, datos = {}) {
   const r = pub.reg;
   const mlId = pub.seg?.mlId || r.mlId;
   if (!mlId) { toast('Esta publicación no tiene id de MercadoLibre guardado. Tocá Actualizar y probá de nuevo.'); return; }
   const botones = $('pub').querySelectorAll('button');
   botones.forEach(b => { b.disabled = true; });
   try {
-    const res = await api(`/api/publicaciones/${mlId}`, { accion, precio });
-    pub.seg = { ...(pub.seg || {}), mlId, estado: res.estado, precio: res.precio ?? pub.seg?.precio ?? null };
-    historialVista.seguimiento[r.id] = pub.seg;
-    pintarPublicacion();
-    dibujarHistorial(historialVista.registros);
-    toast({ precio: 'Precio cambiado.', pausar: 'Publicación pausada.', reactivar: 'Publicación activa de nuevo.', vendida: 'Marcada como vendida: la publicación quedó cerrada.' }[accion]);
+    const res = await api(`/api/publicaciones/${mlId}`, { accion, ...datos });
+    if (accion === 'descripcion') {
+      $('pub-descripcion').value = res.descripcion ?? $('pub-descripcion').value;   // ya limpia, como quedó en MercadoLibre
+      // El borrador guardado también queda con la descripción nueva (si no, "Republicar" o reabrir mostraría la vieja).
+      if (pub.ficha?.publicacion) {
+        try { await api(`/api/registros/${r.id}`, { publicacion: { ...pub.ficha.publicacion, descripcion: res.descripcion } }, 'PUT'); pub.ficha.publicacion.descripcion = res.descripcion; }
+        catch { /* ya está en MercadoLibre; solo el borrador local queda con la anterior */ }
+      }
+    } else {
+      pub.seg = { ...(pub.seg || {}), mlId, estado: res.estado, precio: res.precio ?? pub.seg?.precio ?? null,
+        ...(res.cantidad != null ? { disponibles: res.cantidad } : {}) };
+      historialVista.seguimiento[r.id] = pub.seg;
+      if (accion === 'stock' && res.cantidad != null) $('pub-stock').value = String(res.cantidad);
+      pintarPublicacion();
+      dibujarHistorial(historialVista.registros);
+    }
+    toast({ precio: 'Precio cambiado.', stock: 'Stock cambiado.', descripcion: 'Descripción cambiada.', pausar: 'Publicación pausada.', reactivar: 'Publicación activa de nuevo.', vendida: 'Marcada como vendida: la publicación quedó cerrada.' }[accion]);
   } catch (e) {
     toast(e.message);
   } finally {
@@ -2028,7 +2063,17 @@ $('pub-precio').addEventListener('input', e => { e.target.value = miles(String(e
 $('pub-precio-guardar').addEventListener('click', () => {
   const v = Number(String($('pub-precio').value).replace(/\D/g, ''));
   if (!v) { $('pub-precio').focus(); return; }
-  accionPublicacion('precio', v);
+  accionPublicacion('precio', { precio: v });
+});
+$('pub-stock').addEventListener('input', e => { e.target.value = String(e.target.value).replace(/\D/g, '').slice(0, 6); });
+$('pub-stock-guardar').addEventListener('click', () => {
+  const v = Number($('pub-stock').value);
+  if (!Number.isInteger(v) || v < 1) { toast('El stock tiene que ser 1 o más. Para dejar de vender, pausá o cerrá la publicación.'); $('pub-stock').focus(); return; }
+  accionPublicacion('stock', { stock: v });
+});
+$('pub-descripcion-guardar').addEventListener('click', () => {
+  if ($('pub-descripcion').value.trim().length < 2) { toast('Escribí la descripción.'); $('pub-descripcion').focus(); return; }
+  accionPublicacion('descripcion', { descripcion: $('pub-descripcion').value });
 });
 $('pub-pausar').addEventListener('click', () => accionPublicacion('pausar'));
 $('pub-reactivar').addEventListener('click', () => accionPublicacion('reactivar'));
@@ -2048,6 +2093,36 @@ $('pub-vendida').addEventListener('click', () => {
 
 /* ---------- revisar y publicar ---------- */
 
+const MAX_TALLES = 12;
+
+/**
+ * Los talles a publicar, sin vacíos ni repetidos (igual que limpiarTalles del Worker). Con la cuenta de User Products
+ * MercadoLibre no admite variaciones: cada talle sale como una publicación propia.
+ */
+function listaTalles(texto) {
+  const vistos = new Set();
+  const lista = [];
+  for (const t of String(texto || '').split(/[,;\n]/)) {
+    const talle = t.replace(/\s+/g, ' ').trim();
+    if (!talle || vistos.has(talle.toLowerCase())) continue;
+    vistos.add(talle.toLowerCase());
+    lista.push(talle);
+  }
+  return lista;
+}
+
+/** La lista de talles que rige: vacía si la categoría no tiene talle. */
+const talleDeLista = () => ($('bloque-talles').hidden ? [] : listaTalles($('talles').value));
+
+function pintarTalles() {
+  const lista = talleDeLista();
+  const ayuda = $('talles-ayuda');
+  ayuda.classList.toggle('error-campo', lista.length > MAX_TALLES);
+  if (lista.length > MAX_TALLES) ayuda.textContent = `Son demasiados: el máximo es ${MAX_TALLES} talles por publicación.`;
+  else if (!lista.length) ayuda.textContent = 'Opcional. Si lo dejás vacío se publica un solo talle, el de “Talle” más arriba. Con varios, cada talle sale como una publicación propia.';
+  else ayuda.textContent = `${lista.length} ${lista.length > 1 ? 'publicaciones' : 'publicación'}, una por talle (${lista.join(', ')}). La cantidad es por talle.`;
+}
+
 function leerPublicacion() {
   const valores = new Map([...$('paso-revision').querySelectorAll('[data-id]')].map(c => [c.dataset.id, c.value.trim()]));
   const garantia = $('garantia').value;
@@ -2057,6 +2132,7 @@ function leerPublicacion() {
     condicion: $('condicion').value,
     precio: precioActual(),
     cantidad: Number($('cantidad').value) || 1,
+    talles: talleDeLista(),
     tipoPublicacion: $('tipo').value,
     garantia,
     garantiaTiempo: garantia === 'Garantía del vendedor' ? '30 días' : '',
@@ -2124,16 +2200,35 @@ $('publicar').addEventListener('click', async () => {
   $('resultado-revision').hidden = true;
   const p = leerPublicacion();
   const medidas = p.envio === 'retiro' ? null : validarPaquete(p.paquete).valores;
-  $('confirmar-texto').textContent = `"${p.titulo}" a ${pesos(p.precio)}, ${p.cantidad} unidad${p.cantidad > 1 ? 'es' : ''}, ${$('tipo').selectedOptions[0]?.textContent || ''}. Envío: ${textoEnvio(p)}.`
-    + (medidas ? ` Paquete: ${medidas.pesoG.toLocaleString('es-AR')} g, ${medidas.largoCm} × ${medidas.anchoCm} × ${medidas.altoCm} cm.` : '');
+  const porTalle = p.talles.length > 1;
+  $('confirmar-texto').textContent = `"${p.titulo}" a ${pesos(p.precio)}, ${p.cantidad} unidad${p.cantidad > 1 ? 'es' : ''}${porTalle ? ' por talle' : ''}, ${$('tipo').selectedOptions[0]?.textContent || ''}. Envío: ${textoEnvio(p)}.`
+    + (medidas ? ` Paquete: ${medidas.pesoG.toLocaleString('es-AR')} g, ${medidas.largoCm} × ${medidas.anchoCm} × ${medidas.altoCm} cm.` : '')
+    + (porTalle ? ` Se crean ${p.talles.length} publicaciones, una por talle: ${p.talles.join(', ')}.` : '');
   const avisoGratis = avisoEnvioGratis({ envio: p.envio, envioGratis: p.envioGratis, costoEnvio: p.costoEnvio });
   $('confirmar-avisos').replaceChildren(...[...notas, ...(avisoGratis ? [avisoGratis] : [])].map(t => { const li = document.createElement('li'); li.textContent = t; return li; }));
   $('confirmar').showModal();
 });
 $('confirmar-no').addEventListener('click', () => $('confirmar').close());
 
-function mostrarListo(ml, aviso) {
-  $('listo-texto').textContent = `Quedó publicada${ml.id ? ` (${ml.id})` : ''}.${aviso ? ' ' + aviso : ''}`;
+/** Los links de cada talle publicado (o nada si fue una sola). */
+function dibujarTalles(lista, items = []) {
+  const varios = items.length > 1;
+  lista.hidden = !varios;
+  lista.replaceChildren(...(varios ? items : []).map(i => {
+    const li = document.createElement('li');
+    const a = document.createElement('a');
+    a.href = i.permalink || '#'; a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = `Talle ${i.talle || '?'}${i.id ? ` · ${i.id}` : ''}`;
+    li.append(a);
+    return li;
+  }));
+}
+
+function mostrarListo(ml, aviso, items = [], fallaron = []) {
+  const varios = items.length > 1;
+  const noSalieron = fallaron.length ? ` No salieron: ${fallaron.map(f => `${f.talle} (${f.error})`).join('; ')}. Publicalos aparte.` : '';
+  $('listo-texto').textContent = (varios ? `Quedaron publicadas ${items.length}, una por talle.` : `Quedó publicada${ml.id ? ` (${ml.id})` : ''}.`) + (aviso ? ' ' + aviso : '') + noSalieron;
+  dibujarTalles($('listo-items'), items);
   const portada = estado.fotos[0]?.dataUrl || '';
   $('listo-foto').src = portada;
   $('listo-foto').hidden = !portada;
@@ -2192,8 +2287,9 @@ $('confirmar-si').addEventListener('click', async () => {
   try {
     const r = await api('/api/publicar', { publicacion: leerPublicacion(), fotos: fotosParaEnviar() });
     estado.estadoReg = 'publicada';
-    await guardar({ ml: { id: r.id, permalink: r.permalink } });
-    mostrarListo(r, r.avisoDescripcion);
+    const items = r.items || [];
+    await guardar({ ml: { id: r.id, permalink: r.permalink, ...(items.length > 1 ? { items } : {}) } });
+    mostrarListo(r, r.avisoDescripcion, items, r.fallaron || []);
   } catch (e) {
     avisos($('resultado-revision'), 'error', `No se publicó: ${e.message}`);
   } finally {
@@ -2256,6 +2352,9 @@ async function apiDemo(ruta, cuerpo, metodo) {
   if (ruta === '/api/desconectar') { try { sessionStorage.setItem('vendeloya.demo.sinml', '1'); } catch {} return { ok: true }; }
   atributos.push({ id: 'VALUE_ADDED_TAX', nombre: 'IVA', tipo: 'list', requerido: true, unidades: [], valor: 'Exento',
     opciones: ['Exento', '0 %', '10.5 %', '21 %', '27 %'].map((nombre, i) => ({ id: String(i), nombre })) });
+  // ?demo&moda: la categoría trae talle, para probar la publicación con varios talles sin tocar MercadoLibre.
+  if (new URLSearchParams(location.search).has('moda')) atributos.push({ id: 'SIZE', nombre: 'Talle', tipo: 'list', requerido: true, unidades: [], valor: '',
+    opciones: ['39', '40', '41', '42', '43'].map((nombre, i) => ({ id: String(i), nombre })) });
   if (ruta === '/api/analizar') return {
     identificacion: { producto: 'Taladro percutor eléctrico', marca: 'Black+Decker', modelo: '', estado_detalle: 'Uso visible en el mandril, carcasa sana. Se ve el cable entero y el selector de velocidad funciona según la foto.',
       advertencias: ['No se ve el modelo: buscalo en la etiqueta de abajo.', 'Sacá una foto del enchufe y del cable completo.', 'Aclarar si incluye mechas o maletín.'], confianza: 'media' },
@@ -2279,7 +2378,16 @@ async function apiDemo(ruta, cuerpo, metodo) {
     const sinUnidad = cuerpo.publicacion.atributos.filter(a => a.tipo === 'number_unit' && /^\d+([.,]\d+)?$/.test(String(a.valor || '').trim()));
     if (sinUnidad.length) return { ok: false, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`),
       errores: sinUnidad.map(a => `Attribute ${a.id} with value ${a.valor} is required and was omitted. The provided unit is not valid.`) };
-    const falta = cuerpo.publicacion.atributos.filter(a => a.requerido && !a.valor).map(a => a.nombre);
+    const talles = cuerpo.publicacion.talles || [];
+    const falta = cuerpo.publicacion.atributos.filter(a => a.requerido && !a.valor && !(talles.length && a.id === 'SIZE')).map(a => a.nombre);
+    if (!falta.length && talles.length) {
+      // Como el Worker: un ítem por talle; el 99 no está en la guía de talles.
+      const porTalle = talles.map(talle => talle === '99'
+        ? { talle, ok: false, errores: ['El talle «99» no está en la guía de talles «Standard». Talles de esa guía: 39, 40, 41, 42, 43.'], avisos: [] }
+        : { talle, ok: true, errores: [], avisos: [] });
+      return { ok: porTalle.every(t => t.ok), fotos: cuerpo.fotos.map((_, i) => `demo-${i}`), porTalle,
+        errores: porTalle.flatMap(t => t.errores.map(e => `Talle ${t.talle}: ${e}`)), avisos: [] };
+    }
     return falta.length
       ? { ok: false, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`), errores: [`Falta completar: ${falta.join(', ')}.`] }
       : { ok: true, fotos: cuerpo.fotos.map((_, i) => `demo-${i}`),
@@ -2293,7 +2401,13 @@ async function apiDemo(ruta, cuerpo, metodo) {
     const sinPremium = FALLAS.has('comision-sin-premium');   // MercadoLibre contesta, pero sin el tipo Premium ni la Gratuita
     return { disponible: true, precio, tipos: [t('gold_special', 'Clásica', 13), ...(sinPremium ? [] : [t('gold_pro', 'Premium', 18), t('free', 'Gratuita', 0)])] };
   }
-  if (ruta === '/api/publicar') return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
+  if (ruta === '/api/publicar') {
+    const talles = cuerpo.publicacion?.talles || [];
+    if (!talles.length) return { id: 'MLA-DEMO', permalink: 'https://www.mercadolibre.com.ar', estado: 'demo' };
+    // El 44 simula un rechazo de MercadoLibre al crear: los demás salen y se informa cuál falló.
+    const items = talles.filter(t => t !== '44').map((talle, i) => ({ talle, id: `MLA-DEMO-${i + 1}`, permalink: `https://www.mercadolibre.com.ar/MLA-DEMO-${i + 1}`, estado: 'demo' }));
+    return { id: items[0].id, permalink: items[0].permalink, estado: 'demo', items, fallaron: talles.includes('44') ? [{ talle: '44', error: 'MercadoLibre rechazó este talle' }] : [] };
+  }
 
   const regs = demoRegs();
   const extra = demoExtra(regs);
@@ -2303,7 +2417,7 @@ async function apiDemo(ruta, cuerpo, metodo) {
       const base = i % 3 === 2 ? { estado: 'vendida', vendidas: 1, disponibles: 0, visitas: 40 + i * 7 }
                                : { estado: 'activa', vendidas: 0, disponibles: 1, visitas: 12 + i * 7 };
       const a = extra.acciones[r.ml?.id] || {};
-      return [r.id, { ...base, ...(a.estado ? { estado: a.estado } : {}), precio: a.precio ?? null, mlId: r.ml?.id,
+      return [r.id, { ...base, ...(a.estado ? { estado: a.estado } : {}), ...(a.cantidad ? { disponibles: a.cantidad } : {}), precio: a.precio ?? null, mlId: r.ml?.id,
         preguntas: extra.preguntas.filter(q => q.registroId === r.id).length }];
     })) };
   }
@@ -2321,10 +2435,17 @@ async function apiDemo(ruta, cuerpo, metodo) {
   if (ma) {
     const a = extra.acciones[ma[1]] || {};
     if (cuerpo.accion === 'precio') a.precio = Number(cuerpo.precio);
-    else a.estado = { pausar: 'pausada', reactivar: 'activa', vendida: 'vendida' }[cuerpo.accion] || a.estado;
+    else if (cuerpo.accion === 'stock') {
+      const n = Number(cuerpo.stock);
+      if (!Number.isInteger(n) || n < 1) throw new Error('El stock tiene que ser un número entero de 1 a 999999.');
+      a.cantidad = n;
+    } else if (cuerpo.accion === 'descripcion') {
+      if (String(cuerpo.descripcion || '').trim().length < 2) throw new Error('Escribí la descripción.');
+      a.descripcion = String(cuerpo.descripcion).trim();
+    } else a.estado = { pausar: 'pausada', reactivar: 'activa', vendida: 'vendida' }[cuerpo.accion] || a.estado;
     extra.acciones[ma[1]] = a;
     demoExtra(regs, extra);
-    return { estado: a.estado || 'activa', precio: a.precio ?? null };
+    return cuerpo.accion === 'descripcion' ? { descripcion: a.descripcion } : { estado: a.estado || 'activa', precio: a.precio ?? null, cantidad: a.cantidad ?? null };
   }
   if (ruta === '/api/foto/mejorar') return { foto: cuerpo.foto, cambio: 'demo' };
   if (ruta === '/api/registros') {
@@ -2355,7 +2476,7 @@ if (DEMO) {
   document.title = 'VendeloYa (demo)';
   // Ganchos para probar sin manos (solo en el demo).
   window.__vy = { estado, pendientes, agregarFotos, guardar, contacto, FALLAS, historialVista, api, cargarHistorial, fotosCambiaron, lineaMedidas, armarRespaldo, aplicarTema,
-    hacerOtraIgual, abrirRegistro, cola, correrCola, sumarACola, pintarCola, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion };
+    hacerOtraIgual, abrirRegistro, cola, correrCola, sumarACola, pintarCola, moverFoto, prolijar, redondear, actualizarRed, cierre, conUnidad, leerPublicacion, listaTalles, pintarTalles, abrirPublicacion, pub };
 }
 dibujarFotos();
 refrescarCuenta();

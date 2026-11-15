@@ -1346,6 +1346,51 @@ function acumularLectura(previo, crudo, necesarias = 2) {
   const veces = previo?.ultimo === gtin ? (previo.veces || 0) + 1 : 1;
   return { ultimo: gtin, veces, listo: veces >= necesarias ? gtin : '' };
 }
+/**
+ * Los formatos de código de barras que se le piden a la cámara (BarcodeDetector), solo los que `gtinValidoApp` sabe validar:
+ * EAN-13, EAN-8 y UPC-A (8, 12 y 13 dígitos con su dígito de control). UPC-E NO: la cámara lo lee como 8 dígitos comprimidos
+ * cuyo control es el del UPC-A expandido, así que como GTIN-8 casi nunca pasa y la lectura se perdería sin avisar.
+ * `soportados` es lo que informa el navegador (getSupportedFormats); sin esa lista se piden todos.
+ */
+function formatosDeEscaner(soportados) {
+  const todos = ['ean_13', 'ean_8', 'upc_a'];
+  return Array.isArray(soportados) ? todos.filter(f => soportados.includes(f)) : todos;
+}
+
+/**
+ * Los ids de ítem (uno por talle o variante) a los que va un cambio del panel de la publicación: todos, o el único elegido.
+ * `items` son los de la publicación ({ id, talle, color }); sin ítems (una sola publicación) vale el `primeroId`, el id de siempre.
+ * Un `alcance` que no es "todos" ni un id de la lista se toma como "todos": nunca se aplica a la mitad por un valor raro.
+ */
+function idsDeAlcance(items, alcance, primeroId) {
+  const ids = [...new Set((Array.isArray(items) ? items : []).map(i => i?.id).filter(id => typeof id === 'string' && id))];
+  if (!ids.length) return primeroId ? [primeroId] : [];
+  return alcance && alcance !== 'todos' && ids.includes(alcance) ? [alcance] : ids;
+}
+
+/**
+ * Aplica un cambio a cada ítem, de a uno (MercadoLibre limita los pedidos en paralelo) y sin cortar si uno falla:
+ * devuelve { hechos: [{ id, res }], fallos: [{ id, rotulo, error }] }. `rotulos` es { id: "Talle 40 · Rojo" } para decir cuál falló.
+ */
+async function aplicarEnCadaItem(ids, rotulos, llamar) {
+  const hechos = [];
+  const fallos = [];
+  for (const id of ids) {
+    try { hechos.push({ id, res: await llamar(id) }); }
+    catch (e) { fallos.push({ id, rotulo: (rotulos || {})[id] || id, error: e?.message || 'Error desconocido' }); }
+  }
+  return { hechos, fallos };
+}
+
+const TEXTO_ACCION = { precio: 'Precio cambiado', stock: 'Stock cambiado', descripcion: 'Descripción cambiada', pausar: 'Publicación pausada', reactivar: 'Publicación activa de nuevo', vendida: 'Marcada como vendida' };
+/** Lo que dice el aviso tras un cambio sobre `total` ítems de los que `fallos` no se pudieron: nunca dice "listo" si quedaron talles sin cambiar. */
+function textoResultado(accion, total, fallos) {
+  const base = TEXTO_ACCION[accion] || 'Listo';
+  if (!fallos.length) return total > 1 ? `${base} en los ${total} talles.` : accion === 'vendida' ? `${base}: la publicación quedó cerrada.` : `${base}.`;
+  if (total === 1) return fallos[0].error;
+  const quienes = fallos.map(f => `${f.rotulo} (${f.error})`).join('; ');
+  return fallos.length >= total ? `No se pudo en ningún talle: ${quienes}.` : `${base} en ${total - fallos.length} de ${total} talles. No se pudo en: ${quienes}. Esos quedaron como estaban.`;
+}
 /** Cómo queda el envío, dicho para el diálogo de confirmación. */
 function textoEnvio({ envio, envioGratis, retiroTambien }) {
   if (envio === 'retiro') return 'solo retiro en persona';
@@ -1539,7 +1584,7 @@ async function abrirEscaner(control) {
   $('escaner').showModal();
   try {
     const sabe = (await BarcodeDetector.getSupportedFormats?.()) || null;
-    const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e'].filter(f => !sabe || sabe.includes(f));
+    const formats = formatosDeEscaner(sabe);
     if (!formats.length) throw new Error('El navegador no lee códigos de barras de productos.');
     escaner.detector = new BarcodeDetector({ formats });
     escaner.flujo = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
@@ -2167,7 +2212,7 @@ async function abrirPublicacion(r) {
   $('pub-ver').hidden = !r.permalink;
   $('pub-copiar').hidden = !r.permalink;
   $('pub-precio').value = miles(pub.seg?.precio || r.precio);
-  // El stock del panel es el del primer ítem (el que se edita acá), no la suma de los talles.
+  // El stock que se muestra es el del primer ítem, no la suma de los talles; al cambiarlo se aplica a lo que se elija en "Aplicar a".
   const primero = pub.seg?.talles?.[0] || pub.seg;
   $('pub-stock').value = primero?.disponibles ? String(primero.disponibles) : '';
   $('pub-descripcion').value = '';
@@ -2192,9 +2237,26 @@ async function cargarFichaDe(registroId) {
   } catch { /* sin la ficha igual se puede cambiar precio, estado y stock */ }
 }
 
+/** Los ítems de la publicación abierta: los del registro completo o, si no cargó, los del seguimiento ([] con una sola). */
+function itemsDelPanel() {
+  if (pub.items.length > 1) return pub.items;
+  const talles = pub.seg?.talles || [];
+  return talles.length > 1 ? talles.map(t => ({ id: t.id, talle: t.talle, color: t.color })) : [];
+}
+const rotuloDeItem = i => rotuloDe(i) || i.id;
+/** A qué ítems va lo que se cambia: lo que dice el selector "Aplicar a" (por defecto, todos los talles). */
+function idsDelPanel() {
+  return idsDeAlcance(itemsDelPanel(), $('pub-alcance').value, pub.seg?.mlId || pub.reg?.mlId);
+}
+
 function pintarTallesDelPanel() {
   dibujarTalles($('pub-talles'), pub.items, pub.seg?.talles || []);
   $('pub-talles-caja').hidden = pub.items.length < 2;
+  const sel = $('pub-alcance');
+  const elegido = sel.value;
+  const opciones = [new Option(`Todos los talles (${pub.items.length})`, 'todos'), ...pub.items.filter(i => i.id).map(i => new Option(`Solo ${rotuloDeItem(i)}`, i.id))];
+  sel.replaceChildren(...opciones);
+  sel.value = opciones.some(o => o.value === elegido) ? elegido : 'todos';
 }
 
 function pintarPublicacion() {
@@ -2219,11 +2281,17 @@ function pintarPublicacion() {
 async function accionPublicacion(accion, datos = {}) {
   const r = pub.reg;
   const mlId = pub.seg?.mlId || r.mlId;
-  if (!mlId) { toast('Esta publicación no tiene id de MercadoLibre guardado. Tocá Actualizar y probá de nuevo.'); return; }
+  // Con varios talles cada uno es una publicación propia: el cambio va a todos (o al elegido en "Aplicar a"), uno por uno.
+  const ids = idsDelPanel();
+  if (!ids.length) { toast('Esta publicación no tiene id de MercadoLibre guardado. Tocá Actualizar y probá de nuevo.'); return; }
   const botones = $('pub').querySelectorAll('button');
   botones.forEach(b => { b.disabled = true; });
   try {
-    const res = await api(`/api/publicaciones/${mlId}`, { accion, ...datos });
+    const items = itemsDelPanel();
+    const { hechos, fallos } = await aplicarEnCadaItem(ids, Object.fromEntries(items.map(i => [i.id, rotuloDeItem(i)])), id => api(`/api/publicaciones/${id}`, { accion, ...datos }));
+    if (!hechos.length) { toast(textoResultado(accion, ids.length, fallos)); return; }
+    const res = hechos[0].res;
+    const varios = ids.length > 1 || !!pub.seg?.talles;
     if (accion === 'descripcion') {
       $('pub-descripcion').value = res.descripcion ?? $('pub-descripcion').value;   // ya limpia, como quedó en MercadoLibre
       // El borrador guardado también queda con la descripción nueva (si no, "Republicar" o reabrir mostraría la vieja).
@@ -2231,8 +2299,8 @@ async function accionPublicacion(accion, datos = {}) {
         try { await api(`/api/registros/${r.id}`, { publicacion: { ...pub.ficha.publicacion, descripcion: res.descripcion } }, 'PUT'); pub.ficha.publicacion.descripcion = res.descripcion; }
         catch { /* ya está en MercadoLibre; solo el borrador local queda con la anterior */ }
       }
-    } else if (pub.seg?.talles) {
-      // Varios talles: la acción fue sobre el primero y los totales y el estado son de todos, así que se vuelven a pedir.
+    } else if (varios) {
+      // Varios talles: los totales y el estado son de todos, así que se vuelven a pedir.
       if (accion === 'stock' && res.cantidad != null) $('pub-stock').value = String(res.cantidad);
       await cargarSeguimiento(historialVista.registros, true);
       pub.seg = historialVista.seguimiento[r.id] || pub.seg;
@@ -2245,7 +2313,7 @@ async function accionPublicacion(accion, datos = {}) {
       pintarPublicacion();
       dibujarHistorial(historialVista.registros);
     }
-    toast({ precio: 'Precio cambiado.', stock: 'Stock cambiado.', descripcion: 'Descripción cambiada.', pausar: 'Publicación pausada.', reactivar: 'Publicación activa de nuevo.', vendida: 'Marcada como vendida: la publicación quedó cerrada.' }[accion]);
+    toast(textoResultado(accion, ids.length, fallos));
   } catch (e) {
     toast(e.message);
   } finally {
@@ -2373,7 +2441,8 @@ $('pub-vendida').addEventListener('click', () => {
     return;
   }
   vendidaArmada = Date.now();
-  $('pub-vendida').textContent = '¿Seguro? Tocá otra vez para cerrarla';
+  const n = idsDelPanel().length;
+  $('pub-vendida').textContent = n > 1 ? `¿Seguro? Tocá otra vez para cerrar los ${n} talles` : '¿Seguro? Tocá otra vez para cerrarla';
   setTimeout(() => { if (vendidaArmada) { vendidaArmada = 0; $('pub-vendida').textContent = 'Marcar vendida'; } }, 6000);
 });
 

@@ -334,7 +334,7 @@ test('leerComisiones: null, "" o ausente es "no informado", nunca 0 (ni comisió
 const fuenteApp = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const bloqueCompartido = /\/\* >>> compartido([\s\S]*?)\/\* <<< compartido \*\//.exec(fuenteApp)?.[1];
 assert.ok(bloqueCompartido, 'app.js no tiene el bloque ">>> compartido"');
-const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete', 'unaALaVez', 'colaPorPerder', 'colaParaGuardar', 'colaRestaurada', 'gtinValidoApp', 'gtinDeLectura', 'acumularLectura', 'textoEnvio', 'avisoEnvioGratis'];
+const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete', 'unaALaVez', 'colaPorPerder', 'colaParaGuardar', 'colaRestaurada', 'gtinValidoApp', 'gtinDeLectura', 'acumularLectura', 'textoEnvio', 'avisoEnvioGratis', 'formatosDeEscaner', 'idsDeAlcance', 'aplicarEnCadaItem', 'textoResultado'];
 const front = new Function(`${bloqueCompartido.slice(bloqueCompartido.indexOf('*/') + 2)}\nreturn { ${NOMBRES_COMPARTIDOS.join(', ')} };`)();
 const IMPLEMENTACIONES = {
   worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete },
@@ -1725,6 +1725,163 @@ test('cola persistente: colaParaGuardar / colaRestaurada, ida y vuelta, y descar
   assert.equal(front.colaRestaurada(muchas, 3).length, 3);
   assert.equal(front.colaParaGuardar(muchas, 4).length, 4);
   assert.deepEqual(front.colaParaGuardar(null), []);
+});
+
+test('colaRestaurada: cada validación defensiva descarta o corrige lo que no tiene la forma esperada (un caso por regla)', () => {
+  const FOTO = { dataUrl: 'data:image/png;base64,A' };
+  const valida = (extra = {}) => ({ numero: 1, estado: 'pendiente', fotos: [FOTO], ...extra });
+  const restaurar = g => front.colaRestaurada([g]);
+  assert.equal(restaurar(valida()).length, 1, 'la base es válida');
+
+  // lo que no es un array no se recorre (un objeto con forma de lista tampoco)
+  for (const x of [undefined, null, 0, 'x', {}, { 0: valida(), length: 1 }, new Set([valida()])]) assert.deepEqual(front.colaRestaurada(x), [], String(JSON.stringify(x)));
+  // un elemento nulo o suelto no rompe y se salta; los buenos de alrededor se conservan
+  assert.deepEqual(front.colaRestaurada([valida({ numero: 1 }), null, undefined, 0, 'x', valida({ numero: 2 })]).map(c => c.numero), [1, 2]);
+
+  // el estado tiene que ser uno de los tres conocidos
+  for (const estado of ['armando', 'listo', 'Pendiente', '', undefined, null, 7]) assert.equal(restaurar(valida({ estado })).length, 0, `estado ${estado}`);
+  for (const estado of ['pendiente', 'error']) assert.equal(restaurar(valida({ estado })).length, 1, `estado ${estado}`);
+  assert.equal(restaurar({ numero: 1, estado: 'lista', id: 'r1' }).length, 1);
+
+  // el número tiene que ser entero (el cero y los negativos son enteros)
+  for (const numero of [1.5, '1', NaN, Infinity, undefined, null, true]) assert.equal(restaurar(valida({ numero })).length, 0, `numero ${numero}`);
+  for (const numero of [0, -3, 7]) assert.equal(restaurar(valida({ numero }))[0]?.numero, numero, `numero ${numero}`);
+
+  // la miniatura: solo si es texto, y en la lista también
+  assert.equal(restaurar(valida({ thumb: 't' }))[0].thumb, 't');
+  for (const thumb of [7, {}, null, undefined, ['t']]) {
+    assert.equal(restaurar(valida({ thumb }))[0].thumb, '', `thumb ${JSON.stringify(thumb)} en pendiente`);
+    assert.equal(restaurar({ numero: 1, estado: 'lista', id: 'r1', thumb })[0].thumb, '', `thumb ${JSON.stringify(thumb)} en lista`);
+  }
+  assert.equal(restaurar({ numero: 1, estado: 'lista', id: 'r1', thumb: 't9' })[0].thumb, 't9');
+
+  // la lista exige un id de texto no vacío; el título solo si es texto; "visto" se vuelve booleano; nunca trae fotos
+  for (const id of ['', 5, null, undefined, {}, ['r1']]) assert.equal(restaurar({ numero: 1, estado: 'lista', id }).length, 0, `id ${JSON.stringify(id)}`);
+  const lista = restaurar({ numero: 1, estado: 'lista', id: 'r1', titulo: 'Taladro', visto: 'sí' })[0];
+  assert.deepEqual([lista.titulo, lista.visto], ['Taladro', true]);
+  for (const titulo of [5, {}, null, undefined, ['x']]) assert.equal(restaurar({ numero: 1, estado: 'lista', id: 'r1', titulo })[0].titulo, '', `titulo ${JSON.stringify(titulo)}`);
+  for (const visto of [0, '', null, undefined, false]) assert.strictEqual(restaurar({ numero: 1, estado: 'lista', id: 'r1', visto })[0].visto, false, `visto ${visto}`);
+  for (const visto of [1, true, 'x']) assert.strictEqual(restaurar({ numero: 1, estado: 'lista', id: 'r1', visto })[0].visto, true, `visto ${visto}`);
+  // una lista que trae fotos válidas entra UNA sola vez y sin fotos (no se cuela como pendiente)
+  const conFotos = front.colaRestaurada([{ numero: 1, estado: 'lista', id: 'r1', fotos: [FOTO, FOTO] }]);
+  assert.equal(conFotos.length, 1);
+  assert.deepEqual([conFotos[0].estado, conFotos[0].fotos], ['lista', []]);
+
+  // las fotos: tienen que ser una lista, de data:image/ al principio y solo con dataUrl; sin ninguna válida se descarta el ítem
+  for (const fotos of ['x', {}, 5, null, undefined, [], [null], [{}], [{ dataUrl: 5 }], [{ dataUrl: 'http://x' }], [{ dataUrl: 'data:text/html;base64,A' }], [{ dataUrl: 'xdata:image/png;base64,A' }], [{ dataUrl: ' data:image/png;base64,A' }]])
+    assert.equal(restaurar(valida({ fotos })).length, 0, `fotos ${JSON.stringify(fotos)}`);
+  const mezcla = restaurar(valida({ fotos: [null, { dataUrl: 'http://x' }, { dataUrl: 'data:image/jpeg;base64,B', basura: 1 }, 7, FOTO] }))[0];
+  assert.deepEqual(mezcla.fotos, [{ dataUrl: 'data:image/jpeg;base64,B' }, FOTO], 'quedan solo las válidas y sin campos de más');
+
+  // el error: solo en estado "error" y solo si es texto
+  assert.equal(restaurar(valida({ estado: 'error', error: 'falló' }))[0].error, 'falló');
+  for (const error of [5, {}, null, undefined, ['x']]) assert.equal(restaurar(valida({ estado: 'error', error }))[0].error, '', `error ${JSON.stringify(error)}`);
+  assert.equal(restaurar(valida({ estado: 'pendiente', error: 'viejo' }))[0].error, '', 'un pendiente no arrastra el error');
+
+  // el tope cuenta lo que entra, no lo que se descarta
+  const mezclaTope = [null, valida({ numero: 1 }), { estado: 'x' }, valida({ numero: 2 }), valida({ numero: 3 }), valida({ numero: 4 })];
+  assert.deepEqual(front.colaRestaurada(mezclaTope, 3).map(c => c.numero), [1, 2, 3]);
+  assert.deepEqual(front.colaRestaurada(mezclaTope, 1).map(c => c.numero), [1]);
+  assert.deepEqual(front.colaRestaurada(mezclaTope, 0), []);
+});
+
+/* ---------- escáner de código de barras: formatos que se piden ---------- */
+
+test('escáner: solo se piden formatos que gtinValidoApp valida (UPC-E queda afuera) y el escáner usa esa lista', () => {
+  const todos = ['ean_13', 'ean_8', 'upc_a'];
+  assert.deepEqual(front.formatosDeEscaner(null), todos);
+  assert.deepEqual(front.formatosDeEscaner(undefined), todos);
+  assert.deepEqual(front.formatosDeEscaner(['qr_code', 'ean_13', 'upc_e', 'upc_a']), ['ean_13', 'upc_a'], 'upc_e no se pide aunque el navegador lo sepa');
+  assert.deepEqual(front.formatosDeEscaner(['upc_e', 'qr_code']), [], 'sin formatos válidos no se pide ninguno');
+  assert.deepEqual(front.formatosDeEscaner([]), []);
+  // por qué: un UPC-E real (04252614 = el UPC-A 042100005264) llega como 8 dígitos y NO pasa como GTIN-8
+  assert.equal(front.gtinValidoApp('042100005264'), true);
+  assert.equal(front.gtinValidoApp('04252614'), false);
+  assert.equal(front.gtinDeLectura('04252614'), '', 'la lectura se descartaría sin avisar');
+  assert.deepEqual(front.acumularLectura(front.acumularLectura(null, '04252614'), '04252614'), { ultimo: '', veces: 0, listo: '' });
+  // cada formato que sí se pide produce un código que gtinValidoApp acepta
+  const ejemplo = { ean_13: '7790895000997', ean_8: '96385074', upc_a: '036000291452' };
+  for (const f of todos) assert.equal(front.gtinValidoApp(ejemplo[f]), true, f);
+  // y el escáner de la app arma sus formatos con esa función, sin una lista propia con upc_e
+  assert.match(fuenteApp, /const formats = formatosDeEscaner\(sabe\);/);
+  assert.doesNotMatch(fuenteApp, /\[[^\]]*'upc_e'[^\]]*\]/, "ninguna lista del front pide 'upc_e'");
+});
+
+/* ---------- panel de la publicación: el cambio va a todos los talles ---------- */
+
+test('idsDeAlcance: todos los talles por defecto, uno solo si se lo elige, y un valor raro nunca aplica a la mitad', () => {
+  const items = [{ id: 'MLA1', talle: '40' }, { id: 'MLA2', talle: '41' }, { id: 'MLA3', talle: '42' }];
+  const todos = ['MLA1', 'MLA2', 'MLA3'];
+  for (const alcance of ['todos', undefined, null, '', 0, 'MLA9', 'otro', {}, ['MLA2']]) assert.deepEqual(front.idsDeAlcance(items, alcance, 'MLA1'), todos, `alcance ${JSON.stringify(alcance)}`);
+  assert.deepEqual(front.idsDeAlcance(items, 'MLA2', 'MLA1'), ['MLA2']);
+  assert.deepEqual(front.idsDeAlcance(items, 'MLA3', 'MLA1'), ['MLA3']);
+  // sin repetidos y sin ítems sin id
+  assert.deepEqual(front.idsDeAlcance([{ id: 'MLA1' }, { id: 'MLA1' }, { talle: '9' }, null, { id: '' }, { id: 5 }, { id: 'MLA2' }], 'todos', 'X'), ['MLA1', 'MLA2']);
+  // una sola publicación (sin ítems): el id de siempre
+  for (const sinItems of [[], null, undefined, 'x', [{}], [null]]) assert.deepEqual(front.idsDeAlcance(sinItems, 'todos', 'MLA7'), ['MLA7']);
+  assert.deepEqual(front.idsDeAlcance([], 'todos', ''), []);
+  assert.deepEqual(front.idsDeAlcance(undefined, undefined, undefined), []);
+  assert.deepEqual(front.idsDeAlcance([], 'MLA7', 'MLA7'), ['MLA7']);
+});
+
+await testA('aplicarEnCadaItem: uno por uno, sin cortar si uno falla, y dice cuál falló', async () => {
+  const orden = [];
+  let simultaneas = 0, maxSimultaneas = 0;
+  const llamar = async id => {
+    simultaneas++; maxSimultaneas = Math.max(maxSimultaneas, simultaneas);
+    orden.push(`entra ${id}`);
+    await new Promise(r => setTimeout(r, 5));
+    orden.push(`sale ${id}`);
+    simultaneas--;
+    if (id === 'MLA2') throw new Error('ML rechazó el cambio');
+    if (id === 'MLA3') throw 'sin mensaje';
+    return { id, ok: true };
+  };
+  const r = await front.aplicarEnCadaItem(['MLA1', 'MLA2', 'MLA3', 'MLA4'], { MLA2: 'Talle 41', MLA3: 'Talle 42 · Rojo' }, llamar);
+  assert.deepEqual(r.hechos, [{ id: 'MLA1', res: { id: 'MLA1', ok: true } }, { id: 'MLA4', res: { id: 'MLA4', ok: true } }], 'siguió con MLA4 después de los fallos');
+  assert.deepEqual(r.fallos, [{ id: 'MLA2', rotulo: 'Talle 41', error: 'ML rechazó el cambio' }, { id: 'MLA3', rotulo: 'Talle 42 · Rojo', error: 'Error desconocido' }]);
+  assert.equal(maxSimultaneas, 1, 'de a uno: nunca dos pedidos a la vez');
+  assert.deepEqual(orden, ['entra MLA1', 'sale MLA1', 'entra MLA2', 'sale MLA2', 'entra MLA3', 'sale MLA3', 'entra MLA4', 'sale MLA4'], 'en el orden dado');
+  // sin rótulo conocido, el id; sin ids, nada
+  const sinRotulo = await front.aplicarEnCadaItem(['MLA9'], undefined, async () => { throw new Error('x'); });
+  assert.deepEqual(sinRotulo.fallos, [{ id: 'MLA9', rotulo: 'MLA9', error: 'x' }]);
+  assert.deepEqual(await front.aplicarEnCadaItem([], {}, async () => { throw new Error('no se llama'); }), { hechos: [], fallos: [] });
+});
+
+test('textoResultado: nunca dice "listo" si quedaron talles sin cambiar, y dice en cuántos se aplicó', () => {
+  const f = (rotulo, error) => ({ id: rotulo, rotulo, error });
+  // una sola publicación: los mismos textos de siempre
+  assert.equal(front.textoResultado('precio', 1, []), 'Precio cambiado.');
+  assert.equal(front.textoResultado('stock', 1, []), 'Stock cambiado.');
+  assert.equal(front.textoResultado('descripcion', 1, []), 'Descripción cambiada.');
+  assert.equal(front.textoResultado('pausar', 1, []), 'Publicación pausada.');
+  assert.equal(front.textoResultado('reactivar', 1, []), 'Publicación activa de nuevo.');
+  assert.equal(front.textoResultado('vendida', 1, []), 'Marcada como vendida: la publicación quedó cerrada.');
+  assert.equal(front.textoResultado('precio', 1, [f('x', 'El precio es inválido')]), 'El precio es inválido', 'un solo fallo: el error tal cual');
+  // varios talles, todo bien: se dice que fue en todos
+  assert.equal(front.textoResultado('descripcion', 4, []), 'Descripción cambiada en los 4 talles.');
+  assert.equal(front.textoResultado('vendida', 3, []), 'Marcada como vendida en los 3 talles.');
+  // varios talles, algunos fallaron: cuántos sí, cuáles no y que esos quedaron como estaban
+  assert.equal(front.textoResultado('descripcion', 4, [f('Talle 41', 'ML rechazó'), f('Talle 42', 'sin conexión')]),
+    'Descripción cambiada en 2 de 4 talles. No se pudo en: Talle 41 (ML rechazó); Talle 42 (sin conexión). Esos quedaron como estaban.');
+  assert.equal(front.textoResultado('precio', 3, [f('Talle 40', 'x')]), 'Precio cambiado en 2 de 3 talles. No se pudo en: Talle 40 (x). Esos quedaron como estaban.');
+  // varios talles, ninguno anduvo: no hay "cambiado" por ningún lado
+  const ninguno = front.textoResultado('stock', 2, [f('A', 'x'), f('B', 'y')]);
+  assert.equal(ninguno, 'No se pudo en ningún talle: A (x); B (y).');
+  assert.ok(!/cambiado/i.test(ninguno));
+  assert.equal(front.textoResultado('inventada', 1, []), 'Listo.');
+});
+
+test('el panel de la publicación usa el alcance elegido en cada acción (cableado de app.js e index.html)', () => {
+  assert.match(fuenteApp, /const ids = idsDelPanel\(\);/, 'accionPublicacion arma la lista de ids');
+  assert.match(fuenteApp, /aplicarEnCadaItem\(ids, .*api\(`\/api\/publicaciones\/\$\{id\}`/, 'una llamada por id, no una sola con mlId');
+  assert.doesNotMatch(fuenteApp, /api\(`\/api\/publicaciones\/\$\{mlId\}`, \{ accion/, 'ya no se llama solo con el primer mlId');
+  assert.match(fuenteApp, /toast\(textoResultado\(accion, ids\.length, fallos\)\);/, 'el aviso sale de textoResultado, no de un texto fijo');
+  assert.doesNotMatch(fuenteApp, /precio: 'Precio cambiado\.'/, 'sin el texto fijo que decía "cambiado" aunque fuera solo el primero');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.match(html, /<select id="pub-alcance">/);
+  assert.doesNotMatch(html, /valen para el primer talle/);
+  assert.doesNotMatch(readFileSync(new URL('../README.md', import.meta.url), 'utf8'), /valen para el primer talle/);
 });
 
 /* ---------- variantes con color y fotos propias ---------- */

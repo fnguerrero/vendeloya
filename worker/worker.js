@@ -431,7 +431,8 @@ async function responderPregunta(env, id, cuerpo) {
 }
 
 /**
- * Precio, stock, descripción, pausar, reactivar o marcar vendida (cerrar) una publicación.
+ * Precio, stock, descripción, pausar, reactivar o marcar vendida (cerrar) UNA publicación de MercadoLibre (un id).
+ * Con varios talles cada talle es un id propio: la app llama a este endpoint una vez por cada talle elegido (idsDeAlcance).
  * El título no se edita: con User Products el nombre es el family_name y MercadoLibre no lo deja cambiar.
  */
 async function cambiarPublicacion(env, mlId, cuerpo) {

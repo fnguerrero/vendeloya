@@ -1,0 +1,779 @@
+{
+ "fecha": "2026-11-15",
+ "sinCredenciales": true,
+ "categorias": {
+  "MLA109027": {
+   "nombre": "Zapatillas",
+   "ruta": [
+    "Ropa y Accesorios",
+    "Calzado",
+    "Zapatillas"
+   ],
+   "estadoAtributos": 200,
+   "totalAtributos": 98,
+   "COLOR": {
+    "id": "COLOR",
+    "name": "Color",
+    "tags": {
+     "allow_variations": true,
+     "defines_picture": true,
+     "required": true
+    },
+    "hierarchy": "CHILD_PK",
+    "relevance": 1,
+    "value_type": "string",
+    "value_max_length": 255,
+    "values": [
+     {
+      "id": "283148",
+      "name": "Coral claro"
+     },
+     {
+      "id": "283149",
+      "name": "Coral"
+     },
+     {
+      "id": "283150",
+      "name": "Naranja claro"
+     },
+     {
+      "id": "283151",
+      "name": "Naranja oscuro"
+     },
+     {
+      "id": "283156",
+      "name": "Caqui"
+     },
+     {
+      "id": "283157",
+      "name": "Verde lima"
+     },
+     {
+      "id": "283158",
+      "name": "Verde musgo"
+     },
+     {
+      "id": "283152",
+      "name": "Chocolate"
+     },
+     {
+      "id": "283153",
+      "name": "Suela"
+     },
+     {
+      "id": "283154",
+      "name": "Marrón claro"
+     },
+     {
+      "id": "283155",
+      "name": "Marrón oscuro"
+     },
+     {
+      "id": "283164",
+      "name": "Dorado"
+     },
+     {
+      "id": "51993",
+      "name": "Rojo"
+     },
+     {
+      "id": "283165",
+      "name": "Gris"
+     },
+     {
+      "id": "51994",
+      "name": "Rosa"
+     },
+     {
+      "id": "283160",
+      "name": "Turquesa"
+     },
+     {
+      "id": "51996",
+      "name": "Terracota"
+     },
+     {
+      "id": "283161",
+      "name": "Azul marino"
+     },
+     {
+      "id": "283162",
+      "name": "Índigo"
+     },
+     {
+      "id": "51998",
+      "name": "Bordó"
+     },
+     {
+      "id": "283163",
+      "name": "Rosa chicle"
+     },
+     {
+      "id": "52000",
+      "name": "Naranja"
+     },
+     {
+      "id": "52001",
+      "name": "Beige"
+     },
+     {
+      "id": "52003",
+      "name": "Nude"
+     },
+     {
+      "id": "52005",
+      "name": "Marrón"
+     },
+     {
+      "id": "52007",
+      "name": "Amarillo"
+     },
+     {
+      "id": "52008",
+      "name": "Crema"
+     },
+     {
+      "id": "52010",
+      "name": "Ocre"
+     },
+     {
+      "id": "52012",
+      "name": "Dorado oscuro"
+     },
+     {
+      "id": "52014",
+      "name": "Verde"
+     },
+     {
+      "id": "52015",
+      "name": "Verde claro"
+     },
+     {
+      "id": "52019",
+      "name": "Verde oscuro"
+     },
+     {
+      "id": "52021",
+      "name": "Celeste"
+     },
+     {
+      "id": "52022",
+      "name": "Agua"
+     },
+     {
+      "id": "52024",
+      "name": "Azul petróleo"
+     },
+     {
+      "id": "52028",
+      "name": "Azul"
+     },
+     {
+      "id": "52029",
+      "name": "Azul claro"
+     },
+     {
+      "id": "52031",
+      "name": "Azul acero"
+     },
+     {
+      "id": "52033",
+      "name": "Azul oscuro"
+     },
+     {
+      "id": "52035",
+      "name": "Violeta"
+     },
+     {
+      "id": "52036",
+      "name": "Lavanda"
+     },
+     {
+      "id": "52038",
+      "name": "Lila"
+     },
+     {
+      "id": "52042",
+      "name": "Fucsia"
+     },
+     {
+      "id": "52043",
+      "name": "Rosa claro"
+     },
+     {
+      "id": "52045",
+      "name": "Rosa pálido"
+     },
+     {
+      "id": "52047",
+      "name": "Violeta oscuro"
+     },
+     {
+      "id": "52049",
+      "name": "Negro"
+     },
+     {
+      "id": "52051",
+      "name": "Gris oscuro"
+     },
+     {
+      "id": "52053",
+      "name": "Plateado"
+     },
+     {
+      "id": "52055",
+      "name": "Blanco"
+     },
+     {
+      "id": "338779",
+      "name": "Cian"
+     }
+    ],
+    "tooltip": "Puede tener nombre de fantasía.",
+    "example": "Blanco/Blanco/Negro",
+    "attribute_group_id": "OTHERS",
+    "attribute_group_name": "Otros"
+   }
+  },
+  "MLA109042": {
+   "nombre": "Remeras, Musculosas y Chombas",
+   "ruta": [
+    "Ropa y Accesorios",
+    "Remeras, Musculosas y Chombas"
+   ],
+   "estadoAtributos": 200,
+   "totalAtributos": 85,
+   "COLOR": {
+    "id": "COLOR",
+    "name": "Color",
+    "tags": {
+     "allow_variations": true,
+     "defines_picture": true,
+     "required": true
+    },
+    "hierarchy": "CHILD_PK",
+    "relevance": 1,
+    "value_type": "string",
+    "value_max_length": 255,
+    "values": [
+     {
+      "id": "283148",
+      "name": "Coral claro"
+     },
+     {
+      "id": "283149",
+      "name": "Coral"
+     },
+     {
+      "id": "283150",
+      "name": "Naranja claro"
+     },
+     {
+      "id": "283151",
+      "name": "Naranja oscuro"
+     },
+     {
+      "id": "283156",
+      "name": "Caqui"
+     },
+     {
+      "id": "283157",
+      "name": "Verde lima"
+     },
+     {
+      "id": "283158",
+      "name": "Verde musgo"
+     },
+     {
+      "id": "283152",
+      "name": "Chocolate"
+     },
+     {
+      "id": "283153",
+      "name": "Suela"
+     },
+     {
+      "id": "283154",
+      "name": "Marrón claro"
+     },
+     {
+      "id": "283155",
+      "name": "Marrón oscuro"
+     },
+     {
+      "id": "283164",
+      "name": "Dorado"
+     },
+     {
+      "id": "51993",
+      "name": "Rojo"
+     },
+     {
+      "id": "283165",
+      "name": "Gris"
+     },
+     {
+      "id": "51994",
+      "name": "Rosa"
+     },
+     {
+      "id": "283160",
+      "name": "Turquesa"
+     },
+     {
+      "id": "51996",
+      "name": "Terracota"
+     },
+     {
+      "id": "283161",
+      "name": "Azul marino"
+     },
+     {
+      "id": "283162",
+      "name": "Índigo"
+     },
+     {
+      "id": "51998",
+      "name": "Bordó"
+     },
+     {
+      "id": "283163",
+      "name": "Rosa chicle"
+     },
+     {
+      "id": "52000",
+      "name": "Naranja"
+     },
+     {
+      "id": "52001",
+      "name": "Beige"
+     },
+     {
+      "id": "52003",
+      "name": "Nude"
+     },
+     {
+      "id": "52005",
+      "name": "Marrón"
+     },
+     {
+      "id": "52007",
+      "name": "Amarillo"
+     },
+     {
+      "id": "52008",
+      "name": "Crema"
+     },
+     {
+      "id": "52010",
+      "name": "Ocre"
+     },
+     {
+      "id": "52012",
+      "name": "Dorado oscuro"
+     },
+     {
+      "id": "52014",
+      "name": "Verde"
+     },
+     {
+      "id": "52015",
+      "name": "Verde claro"
+     },
+     {
+      "id": "52019",
+      "name": "Verde oscuro"
+     },
+     {
+      "id": "52021",
+      "name": "Celeste"
+     },
+     {
+      "id": "52022",
+      "name": "Agua"
+     },
+     {
+      "id": "52024",
+      "name": "Azul petróleo"
+     },
+     {
+      "id": "52028",
+      "name": "Azul"
+     },
+     {
+      "id": "52029",
+      "name": "Azul claro"
+     },
+     {
+      "id": "52031",
+      "name": "Azul acero"
+     },
+     {
+      "id": "52033",
+      "name": "Azul oscuro"
+     },
+     {
+      "id": "52035",
+      "name": "Violeta"
+     },
+     {
+      "id": "52036",
+      "name": "Lavanda"
+     },
+     {
+      "id": "52038",
+      "name": "Lila"
+     },
+     {
+      "id": "52042",
+      "name": "Fucsia"
+     },
+     {
+      "id": "52043",
+      "name": "Rosa claro"
+     },
+     {
+      "id": "52045",
+      "name": "Rosa pálido"
+     },
+     {
+      "id": "52047",
+      "name": "Violeta oscuro"
+     },
+     {
+      "id": "52049",
+      "name": "Negro"
+     },
+     {
+      "id": "52051",
+      "name": "Gris oscuro"
+     },
+     {
+      "id": "52053",
+      "name": "Plateado"
+     },
+     {
+      "id": "52055",
+      "name": "Blanco"
+     },
+     {
+      "id": "338779",
+      "name": "Cian"
+     }
+    ],
+    "attribute_group_id": "OTHERS",
+    "attribute_group_name": "Otros"
+   }
+  },
+  "MLA414251": {
+   "nombre": "Botas y Botinetas",
+   "ruta": [
+    "Ropa y Accesorios",
+    "Calzado",
+    "Botas y Botinetas"
+   ],
+   "estadoAtributos": 200,
+   "totalAtributos": 94,
+   "COLOR": {
+    "id": "COLOR",
+    "name": "Color",
+    "tags": {
+     "allow_variations": true,
+     "defines_picture": true,
+     "required": true
+    },
+    "hierarchy": "CHILD_PK",
+    "relevance": 1,
+    "value_type": "string",
+    "value_max_length": 255,
+    "values": [
+     {
+      "id": "283148",
+      "name": "Coral claro"
+     },
+     {
+      "id": "283149",
+      "name": "Coral"
+     },
+     {
+      "id": "283150",
+      "name": "Naranja claro"
+     },
+     {
+      "id": "283151",
+      "name": "Naranja oscuro"
+     },
+     {
+      "id": "283156",
+      "name": "Caqui"
+     },
+     {
+      "id": "283157",
+      "name": "Verde lima"
+     },
+     {
+      "id": "283158",
+      "name": "Verde musgo"
+     },
+     {
+      "id": "283152",
+      "name": "Chocolate"
+     },
+     {
+      "id": "283153",
+      "name": "Suela"
+     },
+     {
+      "id": "283154",
+      "name": "Marrón claro"
+     },
+     {
+      "id": "283155",
+      "name": "Marrón oscuro"
+     },
+     {
+      "id": "283164",
+      "name": "Dorado"
+     },
+     {
+      "id": "51993",
+      "name": "Rojo"
+     },
+     {
+      "id": "283165",
+      "name": "Gris"
+     },
+     {
+      "id": "51994",
+      "name": "Rosa"
+     },
+     {
+      "id": "283160",
+      "name": "Turquesa"
+     },
+     {
+      "id": "51996",
+      "name": "Terracota"
+     },
+     {
+      "id": "283161",
+      "name": "Azul marino"
+     },
+     {
+      "id": "283162",
+      "name": "Índigo"
+     },
+     {
+      "id": "51998",
+      "name": "Bordó"
+     },
+     {
+      "id": "283163",
+      "name": "Rosa chicle"
+     },
+     {
+      "id": "52000",
+      "name": "Naranja"
+     },
+     {
+      "id": "52001",
+      "name": "Beige"
+     },
+     {
+      "id": "52003",
+      "name": "Nude"
+     },
+     {
+      "id": "52005",
+      "name": "Marrón"
+     },
+     {
+      "id": "52007",
+      "name": "Amarillo"
+     },
+     {
+      "id": "52008",
+      "name": "Crema"
+     },
+     {
+      "id": "52010",
+      "name": "Ocre"
+     },
+     {
+      "id": "52012",
+      "name": "Dorado oscuro"
+     },
+     {
+      "id": "52014",
+      "name": "Verde"
+     },
+     {
+      "id": "52015",
+      "name": "Verde claro"
+     },
+     {
+      "id": "52019",
+      "name": "Verde oscuro"
+     },
+     {
+      "id": "52021",
+      "name": "Celeste"
+     },
+     {
+      "id": "52022",
+      "name": "Agua"
+     },
+     {
+      "id": "52024",
+      "name": "Azul petróleo"
+     },
+     {
+      "id": "52028",
+      "name": "Azul"
+     },
+     {
+      "id": "52029",
+      "name": "Azul claro"
+     },
+     {
+      "id": "52031",
+      "name": "Azul acero"
+     },
+     {
+      "id": "52033",
+      "name": "Azul oscuro"
+     },
+     {
+      "id": "52035",
+      "name": "Violeta"
+     },
+     {
+      "id": "52036",
+      "name": "Lavanda"
+     },
+     {
+      "id": "52038",
+      "name": "Lila"
+     },
+     {
+      "id": "52042",
+      "name": "Fucsia"
+     },
+     {
+      "id": "52043",
+      "name": "Rosa claro"
+     },
+     {
+      "id": "52045",
+      "name": "Rosa pálido"
+     },
+     {
+      "id": "52047",
+      "name": "Violeta oscuro"
+     },
+     {
+      "id": "52049",
+      "name": "Negro"
+     },
+     {
+      "id": "52051",
+      "name": "Gris oscuro"
+     },
+     {
+      "id": "52053",
+      "name": "Plateado"
+     },
+     {
+      "id": "52055",
+      "name": "Blanco"
+     },
+     {
+      "id": "338779",
+      "name": "Cian"
+     }
+    ],
+    "attribute_group_id": "OTHERS",
+    "attribute_group_name": "Otros"
+   }
+  }
+ },
+ "condicionales": [
+  {
+   "categoria": "MLA5232",
+   "enviado": {
+    "attributes": [
+     {
+      "id": "BRAND",
+      "value_name": "Black+Decker"
+     }
+    ]
+   },
+   "status": 200,
+   "respuesta": {
+    "required_attributes": [
+     {
+      "id": "GTIN",
+      "name": "Código universal de producto"
+     }
+    ],
+    "callbacks": [],
+    "status": 200
+   }
+  },
+  {
+   "categoria": "MLA5232",
+   "enviado": {
+    "attributes": []
+   },
+   "status": 200,
+   "respuesta": {
+    "required_attributes": [],
+    "callbacks": [],
+    "status": 200
+   }
+  },
+  {
+   "categoria": "MLA109027",
+   "enviado": {
+    "attributes": [
+     {
+      "id": "BRAND",
+      "value_name": "Adidas"
+     },
+     {
+      "id": "GENDER",
+      "value_name": "Hombre"
+     }
+    ]
+   },
+   "status": 200,
+   "respuesta": {
+    "required_attributes": [
+     {
+      "id": "GTIN",
+      "name": "Código universal de producto"
+     }
+    ],
+    "callbacks": [],
+    "status": 200
+   }
+  },
+  {
+   "categoria": "MLA109027",
+   "enviado": {
+    "attributes": [
+     {
+      "id": "GTIN",
+      "value_name": "7790895000997"
+     }
+    ]
+   },
+   "status": 200,
+   "respuesta": {
+    "required_attributes": [],
+    "callbacks": [],
+    "status": 200
+   }
+  }
+ ]
+}

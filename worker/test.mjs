@@ -1871,6 +1871,47 @@ test('leerCondicionales: entiende las formas razonables y descarta lo que no par
     assert.deepEqual(leerCondicionales(raro), [], JSON.stringify(raro));
 });
 
+/* Respuestas REALES de los endpoints públicos de ML, pedidas sin token el 15/11/2026 (tools/sonda-publica.mjs). */
+const publico = JSON.parse(readFileSync(new URL('./fixtures/publico-ml.json', import.meta.url)));
+
+test('leerCondicionales con las respuestas reales de ML: required_attributes con { id, name }, y vacío cuando ya está cargado', () => {
+  assert.equal(publico.sinCredenciales, true, 'el fixture se pidió sin cuenta ni token');
+  assert.ok(publico.condicionales.length >= 4);
+  for (const c of publico.condicionales) assert.equal(c.status, 200, `${c.categoria}: ML contesta 200 sin token`);
+  const real = publico.condicionales.find(c => c.categoria === 'MLA5232' && c.enviado.attributes.length === 1);
+  assert.deepEqual(Object.keys(real.respuesta).sort(), ['callbacks', 'required_attributes', 'status'], 'forma confirmada');
+  assert.deepEqual(real.respuesta.required_attributes[0], { id: 'GTIN', name: 'Código universal de producto' });
+  assert.deepEqual(leerCondicionales(real.respuesta), ['GTIN']);
+  // sin atributos cargados, o con el GTIN ya cargado, no pide nada más
+  const sinNada = publico.condicionales.find(c => c.categoria === 'MLA5232' && c.enviado.attributes.length === 0);
+  assert.deepEqual(leerCondicionales(sinNada.respuesta), []);
+  const conGtin = publico.condicionales.find(c => c.enviado.attributes.some(a => a.id === 'GTIN'));
+  assert.deepEqual(leerCondicionales(conGtin.respuesta), []);
+  // en moda (con marca y género) pide el GTIN, igual que en herramientas
+  const moda = publico.condicionales.find(c => c.categoria === 'MLA109027' && c.enviado.attributes.some(a => a.id === 'GENDER'));
+  assert.deepEqual(leerCondicionales(moda.respuesta), ['GTIN']);
+});
+
+test('COLOR existe con valores en las categorías de moda reales y llega a la app como atributo requerido con opciones', () => {
+  const ids = Object.keys(publico.categorias);
+  assert.ok(ids.length >= 3);
+  for (const id of ids) {
+    const cat = publico.categorias[id];
+    assert.equal(cat.estadoAtributos, 200, `${id}: los atributos son públicos`);
+    assert.ok(cat.COLOR && cat.COLOR.values.length >= 40, `${id} (${cat.nombre}): COLOR con valores`);
+    assert.ok(cat.COLOR.tags.allow_variations, `${id}: el color admite variantes`);
+    const color = elegirAtributos([cat.COLOR], 'nuevo').find(a => a.id === 'COLOR');
+    assert.ok(color, `${id}: COLOR no se descarta`);
+    assert.equal(color.requerido, true);
+    assert.equal(color.opciones.length, cat.COLOR.values.length, `${id}: la lista de colores sale completa`);
+    assert.ok(color.opciones.every(o => o.id && o.nombre));
+    // un color escrito en minúscula y sin acento se resuelve contra la lista real
+    const elegido = color.opciones[0];
+    const attr = atributoParaML({ ...color, opciones: color.opciones }, elegido.nombre.toLowerCase());
+    assert.deepEqual(attr, { id: 'COLOR', value_id: elegido.id, value_name: elegido.nombre });
+  }
+});
+
 await testA('Worker: /api/condicionales consulta a ML solo para leer, tolera cualquier fallo y no vuelve a preguntar si no existe', async () => {
   const { default: worker } = await import('./worker.js');
   const llamadas = [];

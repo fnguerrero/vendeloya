@@ -87,8 +87,9 @@ export function atributoParaML(attr, valor) {
 
 /**
  * Los ids de atributos que MercadoLibre dice que pasan a ser obligatorios según lo ya cargado
- * (respuesta de POST /categories/{id}/attributes/conditional). El contrato no está confirmado en la documentación:
- * se entienden las formas razonables ({ required_attributes: [...] }, { attributes: [...] }, { conditional_required: [...] },
+ * (respuesta de POST /categories/{id}/attributes/conditional). La forma real, confirmada el 15/11/2026 sin token
+ * (worker/fixtures/publico-ml.json), es { required_attributes: [{ id, name }], callbacks, status }; aun así
+ * se entienden otras formas razonables por si cambia ({ required_attributes: [...] }, { attributes: [...] }, { conditional_required: [...] },
  * o una lista suelta; cada elemento un id o un objeto con `id`) y todo lo que no parezca un id de atributo se descarta.
  */
 export function leerCondicionales(datos) {

@@ -1794,7 +1794,7 @@ test('escáner: solo se piden formatos que gtinValidoApp valida (UPC-E queda afu
   assert.deepEqual(front.formatosDeEscaner(['qr_code', 'ean_13', 'upc_e', 'upc_a']), ['ean_13', 'upc_a'], 'upc_e no se pide aunque el navegador lo sepa');
   assert.deepEqual(front.formatosDeEscaner(['upc_e', 'qr_code']), [], 'sin formatos válidos no se pide ninguno');
   assert.deepEqual(front.formatosDeEscaner([]), []);
-  // por qué: un UPC-E real (04252614 = el UPC-A 042100005264) llega como 8 dígitos y NO pasa como GTIN-8
+  // por qué: un UPC-E llega como 8 dígitos y como GTIN-8 pasa solo por casualidad (58 %); este (04252614 = el UPC-A 042100005264) es del 42 % que no pasa y se perdería sin avisar
   assert.equal(front.gtinValidoApp('042100005264'), true);
   assert.equal(front.gtinValidoApp('04252614'), false);
   assert.equal(front.gtinDeLectura('04252614'), '', 'la lectura se descartaría sin avisar');
@@ -1872,17 +1872,497 @@ test('textoResultado: nunca dice "listo" si quedaron talles sin cambiar, y dice 
   assert.equal(front.textoResultado('inventada', 1, []), 'Listo.');
 });
 
-test('el panel de la publicación usa el alcance elegido en cada acción (cableado de app.js e index.html)', () => {
-  assert.match(fuenteApp, /const ids = idsDelPanel\(\);/, 'accionPublicacion arma la lista de ids');
-  assert.match(fuenteApp, /aplicarEnCadaItem\(ids, .*api\(`\/api\/publicaciones\/\$\{id\}`/, 'una llamada por id, no una sola con mlId');
-  assert.doesNotMatch(fuenteApp, /api\(`\/api\/publicaciones\/\$\{mlId\}`, \{ accion/, 'ya no se llama solo con el primer mlId');
-  assert.match(fuenteApp, /toast\(textoResultado\(accion, ids\.length, fallos\)\);/, 'el aviso sale de textoResultado, no de un texto fijo');
-  assert.doesNotMatch(fuenteApp, /precio: 'Precio cambiado\.'/, 'sin el texto fijo que decía "cambiado" aunque fuera solo el primero');
+/* ---------- panel de la publicación: el código REAL de panel.js con un DOM de mentira ---------- */
+
+const { crearPanelPublicacion } = createRequire(import.meta.url)('../panel.js');
+const tick = () => new Promise(r => setTimeout(r, 0));
+
+/**
+ * Monta el panel real con: un DOM mínimo (el select se comporta como uno de verdad: al reemplazar las opciones elige la primera,
+ * y asignar un valor que no existe lo vacía), una API falsa que anota cada llamada (y puede fallar o quedarse esperando por ítem),
+ * y un reloj controlable. Devuelve todo lo que hace falta para mirar qué pasó.
+ */
+function montarPanel({ fichas = {}, fichaCaida = false, fallan = [], seguimientoNuevo = () => ({}) } = {}) {
+  const elementos = new Map();
+  class Select {
+    constructor() { this.opciones = []; this._v = ''; }
+    get value() { return this._v; }
+    set value(v) { this._v = this.opciones.some(o => o.value === v) ? v : (this.opciones[0]?.value ?? ''); }
+    replaceChildren(...o) { this.opciones = o; this._v = o[0]?.value ?? ''; }
+  }
+  const botones = [{ disabled: false }, { disabled: false }, { disabled: false }];
+  const $ = id => {
+    if (!elementos.has(id)) {
+      const e = id === 'pub-alcance' ? new Select() : { value: '', textContent: '', hidden: false, disabled: false, href: '', focus() {}, replaceChildren() {} };
+      if (id === 'pub') Object.assign(e, { abierto: false, showModal() { this.abierto = true; }, querySelectorAll: () => botones });
+      if (id === 'pub-vendida') e.textContent = 'Marcar vendida';
+      elementos.set(id, e);
+    }
+    return elementos.get(id);
+  };
+  const llamadas = [];
+  const toasts = [];
+  const puertas = new Map();
+  const historialVista = { registros: [], seguimiento: {} };
+  const reloj = { t: 100000 };
+  const pub = { reg: null, seg: null, preguntas: [], ficha: null, items: [], ocupado: false };
+  const respuestaDe = (accion, cuerpo, id) => accion === 'precio' ? { estado: 'activa', precio: cuerpo.precio, cantidad: 5 }
+    : accion === 'stock' ? { estado: 'activa', precio: 1000, cantidad: cuerpo.stock }
+    : accion === 'descripcion' ? { descripcion: cuerpo.descripcion.trim() }
+    : { estado: accion === 'pausar' ? 'pausada' : accion === 'reactivar' ? 'activa' : 'vendida', precio: 1000, cantidad: 5 };
+  const api = async (ruta, cuerpo, metodo) => {
+    llamadas.push({ ruta, metodo: metodo || (cuerpo ? 'POST' : 'GET'), cuerpo });
+    let m;
+    if ((m = /^\/api\/registros\/([^/]+)$/.exec(ruta))) {
+      if (cuerpo) return { ok: true };
+      await puertas.get(`ficha:${m[1]}`)?.promesa;
+      if (fichaCaida) throw new Error('sin red');
+      return fichas[decodeURIComponent(m[1])];
+    }
+    if ((m = /^\/api\/publicaciones\/(.+)$/.exec(ruta))) {
+      await puertas.get(m[1])?.promesa;
+      if (fallan.includes(m[1])) throw new Error('ML rechazó el cambio');
+      return respuestaDe(cuerpo.accion, cuerpo, m[1]);
+    }
+    throw new Error(`ruta no simulada ${ruta}`);
+  };
+  const panel = crearPanelPublicacion({
+    pub, $, api, toast: t => toasts.push(t), miles: n => (Number(n) > 0 ? String(n) : ''),
+    ESTADOS: { activa: 'Activa', pausada: 'Pausada', publicada: 'Publicada', vendida: 'Vendida', finalizada: 'Finalizada', en_revision: 'En revisión' },
+    historialVista, cargarSeguimiento: async (_registros, _forzar) => { llamadas.push({ ruta: 'cargarSeguimiento' }); Object.assign(historialVista.seguimiento, seguimientoNuevo(historialVista)); },
+    dibujarTalles: (_lista, items) => { llamadas.push({ ruta: 'dibujarTalles', n: items.length }); },
+    dibujarHistorial: () => { llamadas.push({ ruta: 'dibujarHistorial' }); },
+    cargarPreguntasDe: async () => {},
+    rotuloDe: v => [v.talle, v.color].filter(Boolean).join(' · '),
+    opcion: (texto, valor) => ({ text: texto, value: valor }),
+    idsDeAlcance: front.idsDeAlcance, aplicarEnCadaItem: front.aplicarEnCadaItem, textoResultado: front.textoResultado,
+    ahora: () => reloj.t
+  });
+  const retener = id => { let soltar; const promesa = new Promise(r => { soltar = r; }); puertas.set(id, { promesa, soltar }); return soltar; };
+  const puts = () => llamadas.filter(l => /^\/api\/publicaciones\//.test(l.ruta ?? ''));
+  return { panel, pub, $, llamadas, toasts, historialVista, reloj, botones, retener, puts, ids: () => puts().map(l => l.ruta.split('/').pop()) };
+}
+/** Un registro con varios talles: lo que trae el historial (r), su seguimiento (seg) y su ficha completa. */
+const talles3 = [{ id: 'MLA1', talle: '40' }, { id: 'MLA2', talle: '41' }, { id: 'MLA3', talle: '42' }];
+const regA = { id: 'A', titulo: 'Zapas A', mlId: 'MLA1', precio: 1000, permalink: 'https://ml/a' };
+const segA = (estados = ['activa', 'activa', 'activa']) => ({ mlId: 'MLA1', estado: 'activa', precio: 1000, talles: talles3.map((t, i) => ({ ...t, estado: estados[i], disponibles: 5 })) });
+const fichaA = () => ({ id: 'A', publicacion: { titulo: 'Zapas A', descripcion: 'vieja A' }, ml: { items: talles3.map(t => ({ ...t })) } });
+const regB = { id: 'B', titulo: 'Taladro B', mlId: 'MLB1', precio: 777, permalink: 'https://ml/b' };
+const fichaB = () => ({ id: 'B', publicacion: { titulo: 'Taladro B', descripcion: 'desc B' }, ml: { items: [{ id: 'MLB1' }] } });
+async function abrirCon(m, r, seg) { if (seg) m.historialVista.seguimiento[r.id] = seg; await m.panel.abrir(r); await tick(); }
+
+await testA('panel: cada acción va a TODOS los talles por defecto y al elegido si se lo elige (una llamada por talle, con su acción y su dato)', async () => {
+  const casos = [['precio', { precio: 4500 }], ['stock', { stock: 7 }], ['descripcion', { descripcion: 'nueva' }], ['pausar', {}], ['reactivar', {}], ['vendida', {}]];
+  for (const [accion, datos] of casos) {
+    const m = montarPanel({ fichas: { A: fichaA() } });
+    await abrirCon(m, regA, segA());
+    assert.equal(m.$('pub-alcance').value, 'todos');
+    await m.panel.accion(accion, datos);
+    assert.deepEqual(m.ids(), ['MLA1', 'MLA2', 'MLA3'], `${accion}: los 3 talles, en orden`);
+    assert.ok(m.puts().every(l => l.cuerpo.accion === accion && Object.entries(datos).every(([k, v]) => l.cuerpo[k] === v)), `${accion}: misma acción y dato en cada uno`);
+    assert.match(m.toasts.at(-1), /en los 3 talles\.$/, `${accion}: el aviso dice en cuántos`);
+    // y elegido uno solo: solo ese
+    const u = montarPanel({ fichas: { A: fichaA() } });
+    await abrirCon(u, regA, segA());
+    u.$('pub-alcance').value = 'MLA2';
+    await u.panel.accion(accion, datos);
+    assert.deepEqual(u.ids(), ['MLA2'], `${accion}: solo el elegido`);
+    assert.equal(u.puts()[0].cuerpo.accion, accion);
+    assert.doesNotMatch(u.toasts.at(-1), /talles/, `${accion}: con uno solo el aviso es el de siempre`);
+  }
+});
+
+await testA('panel: un talle que falla no frena a los demás, el aviso dice cuál, y los botones vuelven a estar disponibles', async () => {
+  const m = montarPanel({ fichas: { A: fichaA() }, fallan: ['MLA2'] });
+  await abrirCon(m, regA, segA());
+  await m.panel.accion('precio', { precio: 900 });
+  assert.deepEqual(m.ids(), ['MLA1', 'MLA2', 'MLA3'], 'siguió con MLA3 después del fallo');
+  assert.equal(m.toasts.at(-1), 'Precio cambiado en 2 de 3 talles. No se pudo en: 41 (ML rechazó el cambio). Esos quedaron como estaban.');
+  assert.ok(m.botones.every(b => b.disabled === false), 'los botones se liberan aunque haya fallado uno');
+  assert.equal(m.pub.ocupado, false);
+  // todos fallan: ningún "cambiado" y sin recargar el seguimiento
+  const n = montarPanel({ fichas: { A: fichaA() }, fallan: ['MLA1', 'MLA2', 'MLA3'] });
+  await abrirCon(n, regA, segA());
+  await n.panel.accion('stock', { stock: 3 });
+  assert.match(n.toasts.at(-1), /^No se pudo en ningún talle: /);
+  assert.ok(!n.llamadas.some(l => l.ruta === 'cargarSeguimiento'), 'sin cambios no se recarga nada');
+  assert.ok(n.botones.every(b => b.disabled === false));
+});
+
+await testA('panel: mientras corre un cambio los botones quedan bloqueados y un segundo cambio no arranca', async () => {
+  const m = montarPanel({ fichas: { A: fichaA() } });
+  await abrirCon(m, regA, segA());
+  const soltar = m.retener('MLA1');
+  const primero = m.panel.accion('precio', { precio: 500 });
+  await tick();
+  assert.equal(m.pub.ocupado, true);
+  assert.ok(m.botones.every(b => b.disabled === true), 'bloqueados mientras corre');
+  await m.panel.accion('stock', { stock: 9 });   // otro toque mientras tanto
+  assert.equal(m.toasts.at(-1), 'Esperá a que termine el cambio anterior.');
+  assert.ok(m.puts().every(l => l.cuerpo.accion === 'precio'), 'el segundo no mandó nada');
+  soltar();
+  await primero;
+  assert.deepEqual(m.ids(), ['MLA1', 'MLA2', 'MLA3']);
+  assert.equal(m.pub.ocupado, false);
+  assert.ok(m.botones.every(b => b.disabled === false));
+});
+
+await testA('panel: Esc con un cambio en marcha se frena (y avisa); sin cambio en marcha el diálogo se cierra como siempre', async () => {
+  const m = montarPanel({ fichas: { A: fichaA() } });
+  await abrirCon(m, regA, segA());
+  const libre = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  m.panel.alCancelar(libre);
+  assert.equal(libre.defaultPrevented, false, 'libre: Esc cierra');
+  const soltar = m.retener('MLA2');
+  const corriendo = m.panel.accion('pausar');
+  await tick();
+  const ocupado = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  m.panel.alCancelar(ocupado);
+  assert.equal(ocupado.defaultPrevented, true, 'ocupado: Esc no cierra');
+  assert.equal(m.toasts.at(-1), 'Esperá a que termine el cambio.');
+  soltar();
+  await corriendo;
+  const despues = { defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  m.panel.alCancelar(despues);
+  assert.equal(despues.defaultPrevented, false, 'al terminar, Esc vuelve a cerrar');
+});
+
+await testA('panel: reabrir con la ficha caída NO deja vigente el «Solo …» anterior (arranca en todos los talles)', async () => {
+  // la caja de talles queda oculta porque la ficha no cargó, pero el cambio igual tiene que ir a los 3 talles del seguimiento
+  const m = montarPanel({ fichaCaida: true });
+  await abrirCon(m, regA, segA());
+  assert.equal(m.$('pub-talles-caja').hidden, true, 'la caja queda oculta');
+  assert.equal(m.$('pub-alcance').value, 'todos');
+  await m.panel.accion('precio', { precio: 500 });
+  assert.deepEqual(m.ids(), ['MLA1', 'MLA2', 'MLA3'], 'va a los 3 del seguimiento');
+  assert.match(m.toasts.at(-1), /en los 3 talles/);
+
+  // la elección de un uso anterior (el select ya tenía opciones y «Solo 42» elegido) no sobrevive a reabrir, ni antes de que cargue la ficha
+  const n = montarPanel({ fichas: { A: fichaA() } });
+  await abrirCon(n, regA, segA());
+  n.$('pub-alcance').value = 'MLA3';
+  assert.equal(n.$('pub-alcance').value, 'MLA3');
+  const reabriendo = n.panel.abrir(regA);   // reabre sin esperar la ficha
+  assert.equal(n.$('pub-alcance').value, 'todos', 'recién abierto, antes de que cargue la ficha, ya está en todos');
+  await reabriendo;
+  await tick();
+  assert.equal(n.$('pub-alcance').value, 'todos');
+  n.llamadas.length = 0;
+  await n.panel.accion('pausar');
+  assert.deepEqual(n.ids(), ['MLA1', 'MLA2', 'MLA3']);
+});
+
+await testA('panel: al repintar se conserva el talle elegido, y si ese talle ya no está se vuelve a «todos»', async () => {
+  const m = montarPanel({ fichas: { A: fichaA() } });
+  await abrirCon(m, regA, segA());
+  assert.deepEqual(m.$('pub-alcance').opciones.map(o => o.value), ['todos', 'MLA1', 'MLA2', 'MLA3']);
+  assert.deepEqual(m.$('pub-alcance').opciones.map(o => o.text), ['Todos los talles (3)', 'Solo 40', 'Solo 41', 'Solo 42']);
+  m.$('pub-alcance').value = 'MLA2';
+  m.panel.pintarTalles();
+  assert.equal(m.$('pub-alcance').value, 'MLA2', 'repintar no pierde lo elegido');
+  m.panel.pintarTalles();
+  assert.equal(m.$('pub-alcance').value, 'MLA2');
+  m.pub.items = m.pub.items.filter(i => i.id !== 'MLA2');   // ese talle ya no está
+  m.panel.pintarTalles();
+  assert.equal(m.$('pub-alcance').value, 'todos');
+  assert.equal(m.$('pub-talles-caja').hidden, false, 'quedan 2: la caja se ve');
+  m.pub.items = m.pub.items.slice(0, 1);
+  m.panel.pintarTalles();
+  assert.equal(m.$('pub-talles-caja').hidden, true, 'con uno solo la caja se oculta');
+});
+
+await testA('panel: cambiar de publicación mientras corre un cambio en varios talles NO mezcla los estados (el precio de B no va a los talles de A)', async () => {
+  const nuevoSegA = { A: { ...segA(['activa', 'activa', 'activa']), precio: 100 } };
+  const m = montarPanel({ fichas: { A: fichaA(), B: fichaB() }, seguimientoNuevo: () => nuevoSegA });
+  await abrirCon(m, regA, segA());
+  const segB = { mlId: 'MLB1', estado: 'activa', precio: 777, disponibles: 2 };
+  m.historialVista.seguimiento.B = segB;
+  const soltar = m.retener('MLA2');
+  const deA = m.panel.accion('precio', { precio: 100 });
+  await tick();
+  // el diálogo se reabre en B por la fuerza (aunque Esc esté frenado, la segunda barrera tiene que aguantar)
+  await m.panel.abrir(regB);
+  await tick();
+  assert.equal(m.pub.reg, regB);
+  soltar();
+  await deA;
+  // el cambio de A se hizo completo y con SU precio
+  assert.deepEqual(m.puts().map(l => [l.ruta.split('/').pop(), l.cuerpo.precio]), [['MLA1', 100], ['MLA2', 100], ['MLA3', 100]]);
+  // pero el panel sigue siendo el de B
+  assert.equal(m.pub.reg, regB);
+  assert.strictEqual(m.pub.seg, segB, 'pub.seg sigue siendo el de B');
+  assert.deepEqual(m.pub.items.map(i => i.id), ['MLB1'], 'los ítems son los de B');
+  assert.deepEqual(m.panel.idsDelPanel(), ['MLB1'], 'lo que se cambie ahora va solo a B');
+  assert.deepEqual(m.panel.itemsDelPanel(), []);
+  assert.deepEqual(m.$('pub-alcance').opciones.map(o => o.value), ['todos', 'MLB1'], 'el selector es el de B (ninguno de los talles de A)');
+  assert.equal(m.$('pub-talles-caja').hidden, true, 'y con un solo ítem la caja sigue oculta');
+  assert.equal(m.$('pub-precio').value, '777', 'el precio escrito de B no se tocó');
+  assert.strictEqual(m.historialVista.seguimiento.A, nuevoSegA.A, 'el historial de A sí se actualizó');
+  assert.equal(m.pub.ocupado, false);
+  assert.ok(m.botones.every(b => b.disabled === false));
+  // el siguiente cambio de B va solo a B
+  m.llamadas.length = 0;
+  await m.panel.accion('precio', { precio: 123 });
+  assert.deepEqual(m.ids(), ['MLB1']);
+  assert.equal(m.puts()[0].cuerpo.precio, 123);
+});
+
+await testA('panel: cambiar el stock de varios talles con otra publicación abierta no pisa el stock que se ve de B', async () => {
+  const m = montarPanel({ fichas: { A: fichaA(), B: fichaB() }, seguimientoNuevo: () => ({ A: segA() }) });
+  await abrirCon(m, regA, segA());
+  m.historialVista.seguimiento.B = { mlId: 'MLB1', estado: 'activa', precio: 777, disponibles: 2 };
+  const soltar = m.retener('MLA2');
+  const deA = m.panel.accion('stock', { stock: 40 });
+  await tick();
+  await m.panel.abrir(regB);
+  await tick();
+  assert.equal(m.$('pub-stock').value, '2');
+  soltar();
+  await deA;
+  assert.equal(m.$('pub-stock').value, '2', 'el stock que se ve sigue siendo el de B');
+  assert.deepEqual(m.ids(), ['MLA1', 'MLA2', 'MLA3']);
+  assert.equal(m.pub.reg, regB);
+});
+
+await testA('panel: lo mismo con una sola publicación: el resultado de A no pisa el seguimiento ni el stock que se ve de B', async () => {
+  const m = montarPanel({ fichas: { A: { ...fichaA(), ml: { items: [{ id: 'MLA1' }] } }, B: fichaB() } });
+  const segUnaA = { mlId: 'MLA1', estado: 'activa', precio: 1000, disponibles: 5, visitas: 11, vendidas: 3 };
+  const segB = { mlId: 'MLB1', estado: 'pausada', precio: 777, disponibles: 2, visitas: 99 };
+  await abrirCon(m, regA, segUnaA);
+  m.historialVista.seguimiento.B = segB;
+  const soltar = m.retener('MLA1');
+  const deA = m.panel.accion('stock', { stock: 40 });
+  await tick();
+  await m.panel.abrir(regB);
+  await tick();
+  assert.equal(m.$('pub-stock').value, '2');
+  soltar();
+  await deA;
+  assert.strictEqual(m.pub.seg, segB, 'pub.seg sigue siendo el de B');
+  assert.equal(m.$('pub-stock').value, '2', 'el stock que se ve es el de B, no los 40 de A');
+  assert.equal(m.historialVista.seguimiento.A.disponibles, 40, 'el de A sí quedó actualizado');
+  assert.deepEqual([m.historialVista.seguimiento.A.visitas, m.historialVista.seguimiento.A.vendidas], [11, 3], 'con lo suyo (visitas y ventas de A), no con lo de B');
+  assert.equal(m.historialVista.seguimiento.A.mlId, 'MLA1');
+  assert.equal(m.historialVista.seguimiento.B, segB);
+  assert.equal(m.$('pub-reactivar').hidden, false, 'el panel pintado es el de B (pausada)');
+});
+
+await testA('panel: cambiar la descripción con otra publicación abierta guarda el borrador de la publicación CORRECTA, nunca el de la otra', async () => {
+  const m = montarPanel({ fichas: { A: fichaA(), B: fichaB() } });
+  await abrirCon(m, regA, segA());
+  m.historialVista.seguimiento.B = { mlId: 'MLB1', estado: 'activa', precio: 777 };
+  const soltar = m.retener('MLA3');
+  const deA = m.panel.accion('descripcion', { descripcion: '  nueva de A  ' });
+  await tick();
+  await m.panel.abrir(regB);
+  await tick();
+  assert.equal(m.$('pub-descripcion').value, 'desc B');
+  soltar();
+  await deA;
+  const guardados = m.llamadas.filter(l => l.metodo === 'PUT' && /^\/api\/registros\//.test(l.ruta));
+  assert.equal(guardados.length, 1, 'un solo borrador guardado');
+  assert.equal(guardados[0].ruta, '/api/registros/A', 'en el registro de A');
+  assert.deepEqual(guardados[0].cuerpo, { publicacion: { titulo: 'Zapas A', descripcion: 'nueva de A' } }, 'con el borrador de A y la descripción de A, no el de B');
+  assert.equal(m.$('pub-descripcion').value, 'desc B', 'el texto que se ve de B no se pisó con el de A');
+  assert.ok(!m.llamadas.some(l => l.ruta === '/api/registros/B' && l.metodo === 'PUT'), 'nada se guardó sobre B');
+  // sin cambiar de publicación, el texto limpio sí se muestra y el borrador queda con la descripción nueva
+  const n = montarPanel({ fichas: { A: fichaA() } });
+  await abrirCon(n, regA, segA());
+  await n.panel.accion('descripcion', { descripcion: '  nueva  ' });
+  assert.equal(n.$('pub-descripcion').value, 'nueva');
+  assert.equal(n.pub.ficha.publicacion.descripcion, 'nueva');
+  assert.match(n.toasts.at(-1), /^Descripción cambiada en los 3 talles/);
+});
+
+await testA('panel: la ficha de una publicación que llega tarde (ya abrieron otra) se descarta y no pisa el panel', async () => {
+  const m = montarPanel({ fichas: { A: fichaA(), B: fichaB() } });
+  const soltarA = m.retener('ficha:A');
+  m.historialVista.seguimiento.A = segA();
+  m.historialVista.seguimiento.B = { mlId: 'MLB1', estado: 'activa', precio: 777 };
+  await m.panel.abrir(regA);          // la ficha de A queda esperando
+  await m.panel.abrir(regB);
+  await tick();
+  assert.equal(m.$('pub-descripcion').value, 'desc B');
+  assert.deepEqual(m.pub.items.map(i => i.id), ['MLB1']);
+  soltarA();                          // llega la de A cuando el panel ya es de B
+  await tick();
+  assert.equal(m.$('pub-descripcion').value, 'desc B', 'la descripción de A no pisa la de B');
+  assert.deepEqual(m.pub.items.map(i => i.id), ['MLB1'], 'ni sus talles');
+  assert.equal(m.pub.ficha.id, 'B');
+  assert.deepEqual(m.$('pub-alcance').opciones.map(o => o.value), ['todos', 'MLB1']);
+});
+
+await testA('panel: sin seguimiento todavía, un registro con varios talles igual cambia en todos y pide el seguimiento después', async () => {
+  const m = montarPanel({ fichas: { A: fichaA() }, seguimientoNuevo: () => ({ A: segA() }) });
+  await abrirCon(m, regA, null);          // el historial todavía no trajo el seguimiento
+  assert.equal(m.pub.seg, null);
+  await m.panel.accion('stock', { stock: 3 });
+  assert.deepEqual(m.ids(), ['MLA1', 'MLA2', 'MLA3'], 'los ítems salen de la ficha y el id de siempre del registro');
+  assert.ok(m.llamadas.some(l => l.ruta === 'cargarSeguimiento'), 'con varios se vuelve a pedir el seguimiento');
+  assert.equal(m.pub.seg.talles.length, 3, 'y el panel toma el nuevo');
+  assert.equal(m.$('pub-stock').value, '3');
+});
+
+test('panel: «Reactivar» sigue a mano si algún talle quedó pausado, aunque el estado agregado diga «activa»', async () => {
+  const m = montarPanel();
+  const con = (est, talles) => { m.pub.reg = regA; m.pub.seg = { mlId: 'MLA1', estado: est, talles }; m.panel.pintar(); return { reactivar: m.$('pub-reactivar').hidden, pausar: m.$('pub-pausar').hidden, vendida: m.$('pub-vendida').hidden }; };
+  const t = estados => estados.map((estado, i) => ({ id: `MLA${i + 1}`, estado }));
+  assert.deepEqual(con('activa', t(['activa', 'pausada', 'activa'])), { reactivar: false, pausar: false, vendida: false }, 'mezcla: se puede pausar y reactivar los que faltan');
+  assert.deepEqual(con('activa', t(['activa', 'activa'])), { reactivar: true, pausar: false, vendida: false }, 'todas activas: no hay nada que reactivar');
+  assert.deepEqual(con('pausada', t(['pausada', 'pausada'])), { reactivar: false, pausar: true, vendida: false }, 'todas pausadas');
+  assert.deepEqual(con('pausada', undefined), { reactivar: false, pausar: true, vendida: false }, 'una sola pausada');
+  assert.deepEqual(con('activa', undefined), { reactivar: true, pausar: false, vendida: false }, 'una sola activa');
+  assert.deepEqual(con('vendida', t(['vendida', 'pausada'])), { reactivar: false, pausar: true, vendida: true }, 'cerrada: queda el aviso de cerrada y no se ofrece vender de nuevo');
+  assert.equal(m.$('pub-cerrada').hidden, false);
+  for (const id of ['pub-precio', 'pub-stock', 'pub-descripcion']) assert.equal(m.$(id).disabled, true, `${id} bloqueado si está cerrada`);
+  con('activa', t(['activa', 'activa']));
+  for (const id of ['pub-precio', 'pub-stock', 'pub-descripcion']) assert.equal(m.$(id).disabled, false);
+  assert.equal(m.$('pub-resumen').textContent, 'Activa · 2 talles');
+});
+
+await testA('panel: reactivar con fallo parcial se puede reintentar desde el panel y termina de reactivar los que faltaban', async () => {
+  const m = montarPanel({ fichas: { A: fichaA() }, fallan: ['MLA2'],
+    seguimientoNuevo: () => ({ A: segA(['activa', 'pausada', 'activa']) }) });
+  await abrirCon(m, regA, segA(['pausada', 'pausada', 'pausada']));
+  assert.equal(m.$('pub-reactivar').hidden, false);
+  await m.panel.accion('reactivar');
+  assert.match(m.toasts.at(-1), /^Publicación activa de nuevo en 2 de 3 talles\. No se pudo en: 41/);
+  // el agregado ahora es «activa» pero uno sigue pausado: el botón tiene que seguir ahí
+  assert.equal(m.pub.seg.estado, 'activa');
+  assert.equal(m.$('pub-reactivar').hidden, false, 'Reactivar sigue visible para reintentar');
+});
+
+await testA('panel: «Marcar vendida» pide confirmar diciendo cuántos talles cierra, y la confirmación se anula si cambia «Aplicar a»', async () => {
+  const m = montarPanel({ fichas: { A: fichaA() } });
+  await abrirCon(m, regA, segA());
+  const b = () => m.$('pub-vendida').textContent;
+  await m.panel.tocarVendida();
+  assert.equal(b(), '¿Seguro? Tocá otra vez para cerrar los 3 talles');
+  assert.equal(m.puts().length, 0, 'el primer toque no manda nada');
+  // se cambia el selector: la confirmación ya no vale (ahora cerraría otra cosa)
+  m.$('pub-alcance').value = 'MLA2';
+  m.panel.alCambiarAlcance();
+  assert.equal(b(), 'Marcar vendida');
+  m.reloj.t += 1000;
+  await m.panel.tocarVendida();   // este toque NO confirma: vuelve a pedir, ahora para 1 solo
+  assert.equal(m.puts().length, 0, 'sin confirmación nueva no cierra nada');
+  assert.equal(b(), '¿Seguro? Tocá otra vez para cerrarla');
+  m.reloj.t += 1000;
+  await m.panel.tocarVendida();   // segundo toque, dentro del plazo: cierra solo el elegido
+  assert.deepEqual(m.ids(), ['MLA2']);
+  assert.equal(m.puts()[0].cuerpo.accion, 'vendida');
+  assert.equal(b(), 'Marcar vendida');
+});
+
+await testA('panel: la confirmación de «vendida» con exactamente 2 talles dice «los 2 talles», vence a los 6 segundos y cierra a los dos', async () => {
+  const dos = { ...fichaA(), ml: { items: talles3.slice(0, 2) } };
+  const m = montarPanel({ fichas: { A: dos } });
+  await abrirCon(m, regA, { ...segA(), talles: segA().talles.slice(0, 2) });
+  await m.panel.tocarVendida();
+  assert.equal(m.$('pub-vendida').textContent, '¿Seguro? Tocá otra vez para cerrar los 2 talles');
+  // pasan más de 6 segundos: el segundo toque ya no confirma, vuelve a pedir
+  m.reloj.t += 6001;
+  await m.panel.tocarVendida();
+  assert.equal(m.puts().length, 0);
+  assert.equal(m.$('pub-vendida').textContent, '¿Seguro? Tocá otra vez para cerrar los 2 talles');
+  m.reloj.t += 5999;
+  await m.panel.tocarVendida();
+  assert.deepEqual(m.ids(), ['MLA1', 'MLA2']);
+  assert.match(m.toasts.at(-1), /^Marcada como vendida en los 2 talles\.$/);
+  // una sola publicación: «cerrarla»
+  const u = montarPanel({ fichas: { B: fichaB() } });
+  await abrirCon(u, regB, { mlId: 'MLB1', estado: 'activa', precio: 777 });
+  await u.panel.tocarVendida();
+  assert.equal(u.$('pub-vendida').textContent, '¿Seguro? Tocá otra vez para cerrarla');
+  await u.panel.tocarVendida();
+  assert.deepEqual(u.ids(), ['MLB1']);
+  assert.equal(u.toasts.at(-1), 'Marcada como vendida: la publicación quedó cerrada.');
+});
+
+await testA('panel: si el talle elegido desaparece al repintar (cambió la ficha), la confirmación de «vendida» también se anula', async () => {
+  const m = montarPanel({ fichas: { A: fichaA() } });
+  await abrirCon(m, regA, segA());
+  m.$('pub-alcance').value = 'MLA3';
+  await m.panel.tocarVendida();
+  assert.equal(m.$('pub-vendida').textContent, '¿Seguro? Tocá otra vez para cerrarla');
+  m.pub.items = m.pub.items.filter(i => i.id !== 'MLA3');
+  m.panel.pintarTalles();   // MLA3 ya no está: el alcance pasa a «todos»
+  assert.equal(m.$('pub-alcance').value, 'todos');
+  assert.equal(m.$('pub-vendida').textContent, 'Marcar vendida');
+  // abrir otra publicación también la anula
+  await m.panel.tocarVendida();
+  assert.match(m.$('pub-vendida').textContent, /^¿Seguro/);
+  m.historialVista.seguimiento.B = { mlId: 'MLB1', estado: 'activa', precio: 777 };
+  await m.panel.abrir(regB);
+  assert.equal(m.$('pub-vendida').textContent, 'Marcar vendida');
+});
+
+await testA('panel: una sola publicación (sin talles) conserva el comportamiento de siempre: un PUT, seguimiento y stock actualizados', async () => {
+  const m = montarPanel({ fichas: { B: fichaB() } });
+  const seg = { mlId: 'MLB1', estado: 'activa', precio: 777, disponibles: 2 };
+  await abrirCon(m, regB, seg);
+  assert.equal(m.$('pub-stock').value, '2');
+  assert.equal(m.$('pub-talles-caja').hidden, true);
+  await m.panel.accion('stock', { stock: 12 });
+  assert.deepEqual(m.ids(), ['MLB1']);
+  assert.equal(m.toasts.at(-1), 'Stock cambiado.');
+  assert.equal(m.pub.seg.disponibles, 12);
+  assert.equal(m.historialVista.seguimiento.B.disponibles, 12);
+  assert.equal(m.$('pub-stock').value, '12');
+  assert.ok(m.llamadas.some(l => l.ruta === 'dibujarHistorial'), 'se repinta el historial');
+  assert.ok(!m.llamadas.some(l => l.ruta === 'cargarSeguimiento'), 'una sola: no se vuelve a pedir el seguimiento');
+  await m.panel.accion('precio', { precio: 800 });
+  assert.equal(m.pub.seg.precio, 800);
+  await m.panel.accion('pausar');
+  assert.equal(m.pub.seg.estado, 'pausada');
+  assert.equal(m.$('pub-reactivar').hidden, false);
+  // con varios talles sí se vuelve a pedir el seguimiento (y se repintan los talles)
+  const v = montarPanel({ fichas: { A: fichaA() } });
+  await abrirCon(v, regA, segA());
+  v.llamadas.length = 0;
+  await v.panel.accion('precio', { precio: 5 });
+  assert.ok(v.llamadas.some(l => l.ruta === 'cargarSeguimiento'), 'varios: se vuelve a pedir');
+  assert.ok(v.llamadas.some(l => l.ruta === 'dibujarTalles'), 'y se repintan los talles');
+  assert.equal(v.$('pub-stock').value, '5', 'el stock que se ve es el que devolvió ML');
+  // sin id de MercadoLibre no se manda nada
+  const s = montarPanel();
+  await abrirCon(s, { id: 'X', titulo: 'x', precio: 1 }, null);
+  await s.panel.accion('precio', { precio: 1 });
+  assert.equal(s.puts().length, 0);
+  assert.match(s.toasts.at(-1), /no tiene id de MercadoLibre/);
+  assert.equal(s.pub.ocupado, false);
+});
+
+test('gtinValidoApp acepta solo 8, 12, 13 y 14 dígitos aunque el control sea válido en otros largos', () => {
+  const control = c => { const s = [...c].reverse().reduce((a, n, i) => a + Number(n) * (i % 2 === 0 ? 3 : 1), 0); return (10 - (s % 10)) % 10; };
+  const cuerpoDe = largo => '7790895000997123'.slice(0, largo - 1);
+  for (const largo of [8, 12, 13, 14]) { const c = cuerpoDe(largo) + control(cuerpoDe(largo)); assert.equal(front.gtinValidoApp(c), true, `largo ${largo}`); assert.equal(gtinValido(c), true); }
+  for (const largo of [1, 5, 7, 9, 10, 11, 15, 16]) {
+    const c = cuerpoDe(largo) + control(cuerpoDe(largo));
+    assert.equal(front.gtinValidoApp(c), false, `largo ${largo} con control válido`);
+    assert.equal(gtinValido(c), false, `worker, largo ${largo}`);
+  }
+});
+
+test('el panel está cableado en app.js, index.html y sw.js (panel.js se carga antes que app.js y entra al shell offline)', () => {
   const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
   assert.match(html, /<select id="pub-alcance">/);
+  assert.ok(html.indexOf('src="panel.js') > 0 && html.indexOf('src="panel.js') < html.indexOf('src="app.js'), 'panel.js antes de app.js');
+  assert.match(readFileSync(new URL('../sw.js', import.meta.url), 'utf8'), /'panel\.js\?v=\d+'/, 'panel.js en el shell del service worker');
+  assert.match(fuenteApp, /const panel = crearPanelPublicacion\(\{[\s\S]*?idsDeAlcance, aplicarEnCadaItem, textoResultado/, 'app.js arma el panel con los helpers compartidos');
+  assert.match(fuenteApp, /\$\('pub-vendida'\)\.addEventListener\('click', panel\.tocarVendida\)/);
+  assert.match(fuenteApp, /\$\('pub-alcance'\)\.addEventListener\('change', panel\.alCambiarAlcance\)/);
+  assert.match(fuenteApp, /\$\('pub'\)\.addEventListener\('cancel', panel\.alCancelar\)/);
+  assert.match(fuenteApp, /const abrirPublicacion = panel\.abrir;/);
+  assert.match(fuenteApp, /const accionPublicacion = panel\.accion;/);
   assert.doesNotMatch(html, /valen para el primer talle/);
   assert.doesNotMatch(readFileSync(new URL('../README.md', import.meta.url), 'utf8'), /valen para el primer talle/);
+  // el panel real no usa el DOM ni fetch por su cuenta: todo entra por dependencias
+  const panelFuente = readFileSync(new URL('../panel.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(panelFuente, /\bdocument\b|\bfetch\(|\bwindow\./, 'panel.js solo toca lo que recibe');
 });
+
+/*FIN_PANEL_TESTS*/
 
 /* ---------- variantes con color y fotos propias ---------- */
 

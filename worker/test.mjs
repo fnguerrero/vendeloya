@@ -334,7 +334,7 @@ test('leerComisiones: null, "" o ausente es "no informado", nunca 0 (ni comisió
 const fuenteApp = readFileSync(new URL('../app.js', import.meta.url), 'utf8');
 const bloqueCompartido = /\/\* >>> compartido([\s\S]*?)\/\* <<< compartido \*\//.exec(fuenteApp)?.[1];
 assert.ok(bloqueCompartido, 'app.js no tiene el bloque ">>> compartido"');
-const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete', 'unaALaVez', 'colaPorPerder', 'colaParaGuardar', 'colaRestaurada', 'gtinValidoApp', 'gtinDeLectura', 'acumularLectura', 'textoEnvio', 'avisoEnvioGratis', 'formatosDeEscaner', 'idsDeAlcance', 'aplicarEnCadaItem', 'textoResultado'];
+const NOMBRES_COMPARTIDOS = ['calcularGanancia', 'precioDeEquilibrio', 'aCentimetros', 'aGramos', 'cambiarDeRegistro', 'resolverComision', 'parsearNumero', 'parsearMonto', 'validarPaquete', 'unaALaVez', 'colaPorPerder', 'colaParaGuardar', 'colaRestaurada', 'gtinValidoApp', 'gtinDeLectura', 'acumularLectura', 'textoEnvio', 'avisoEnvioGratis', 'formatosDeEscaner', 'idsDeAlcance', 'aplicarEnCadaItem', 'textoResultado', 'conAvisoFijo'];
 const front = new Function(`${bloqueCompartido.slice(bloqueCompartido.indexOf('*/') + 2)}\nreturn { ${NOMBRES_COMPARTIDOS.join(', ')} };`)();
 const IMPLEMENTACIONES = {
   worker: { calcularGanancia, precioDeEquilibrio, aCentimetros, aGramos, parsearNumero, parsearMonto, validarPaquete },
@@ -2363,6 +2363,53 @@ test('el panel está cableado en app.js, index.html y sw.js (panel.js se carga a
 });
 
 /*FIN_PANEL_TESTS*/
+
+/* ---------- cierre automático: el aviso fijo al principio y al final de la descripción ---------- */
+
+test('conAvisoFijo: el aviso va al principio y al final, sin repetirse, y aplicarlo dos veces da lo mismo', () => {
+  const f = front.conAvisoFijo;
+  const A = 'RETIRO POR ZONA X\nNO SE REALIZAN ENVÍOS';
+  const D = 'Colchón de 1 plaza.\n\n- Marca: Flou\n- Estado: usado';
+  assert.equal(f(D, A), `${A}\n\n${D}\n\n${A}`, 'principio y final, separados por una línea en blanco');
+  // aplicarlo de nuevo no cambia nada
+  const una = f(D, A);
+  assert.equal(f(una, A), una);
+  assert.equal(f(f(una, A), A), una);
+  // ya está solo en un extremo: se agrega en el otro
+  assert.equal(f(`${A}\n\n${D}`, A), `${A}\n\n${D}\n\n${A}`, 'estaba al principio: falta el final');
+  assert.equal(f(`${D}\n\n${A}`, A), `${A}\n\n${D}\n\n${A}`, 'estaba al final: falta el principio');
+  // en el medio no cuenta: se agrega en los dos extremos
+  const medio = `Hola\n\n${A}\n\nChau`;
+  assert.equal(f(medio, A), `${A}\n\n${medio}\n\n${A}`);
+  // se reconoce igual con otras mayúsculas, saltos de línea de Windows y espacios de más
+  const parecido = '  retiro por zona x \r\n  no se realizan   envíos  ';
+  const yaPuesto = `${parecido}\n\nCuerpo\n\n${parecido}`;
+  assert.equal(f(yaPuesto, A), yaPuesto.trim(), 'ya está en los dos extremos: no se agrega nada (solo se recortan los bordes)');
+  assert.equal(f(`${parecido}\n\nCuerpo`, A).split(/zona x/i).length - 1, 2, 'solo falta el final: queda dos veces en total');
+  // la descripción es el aviso mismo: no se duplica
+  assert.equal(f(A, A), A);
+  // se recorta el aviso y la descripción
+  assert.equal(f('  hola  ', '  AVISO  '), 'AVISO\n\nhola\n\nAVISO');
+  // sin aviso o sin descripción: tal cual vino
+  for (const sinAviso of [undefined, null, '', '   ', '\n']) assert.equal(f(D, sinAviso), D, JSON.stringify(sinAviso));
+  for (const sinDesc of [undefined, null, '', '   ']) assert.equal(f(sinDesc, A), String(sinDesc ?? ''), JSON.stringify(sinDesc));
+  assert.equal(f(42, 'A'), 'A\n\n42\n\nA', 'un valor raro se trata como texto');
+  assert.equal(f('  hola  \n', ''), '  hola  \n', 'sin aviso devuelve el texto EXACTO, sin recortarlo');
+  assert.equal(f('   ', 'AVISO'), '   ', 'sin descripción devuelve lo mismo, sin agregar nada');
+});
+
+test('el cierre automático está cableado: casilla en Ajustes y aplicado al armar, al publicar y al cambiar la descripción', () => {
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  assert.match(html, /<input id="cierre-auto" type="checkbox">/);
+  assert.match(fuenteApp, /const cierreAuto = \(\) => local\('vendeloya\.cierre-auto'\) === '1' && !!cierre\(\);/, 'solo vale con un cierre guardado');
+  assert.match(fuenteApp, /const conCierreAuto = texto => \(cierreAuto\(\) \? conAvisoFijo\(texto, cierre\(\)\) : texto\);/);
+  assert.match(fuenteApp, /descripcion: conCierreAuto\(\$\('descripcion'\)\.value\),/, 'lo que se revisa y se publica lleva el cierre');
+  assert.match(fuenteApp, /\$\('descripcion'\)\.value = conCierreAuto\(p\.descripcion \|\| ''\);/, 'y se ve en el campo al armar');
+  assert.match(fuenteApp, /descripcion: conCierreAuto\(\$\('pub-descripcion'\)\.value\) \}\);/, 'y al cambiar la descripción de una ya publicada');
+  assert.match(fuenteApp, /\$\('cierre-auto'\)\.checked = cierreAuto\(\);/, 'Ajustes muestra la casilla como quedó');
+  assert.match(fuenteApp, /\$\('agregar-cierre'\)\.hidden = !cierre\(\) \|\| cierreAuto\(\);/, 'con el automático el botón manual sobra');
+  assert.match(fuenteApp, /if \(!texto\) \{ local\('vendeloya\.cierre-auto', null\);/, 'borrar el cierre apaga el automático');
+});
 
 /* ---------- variantes con color y fotos propias ---------- */
 

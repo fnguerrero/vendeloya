@@ -289,6 +289,7 @@ function pintarConfig() {
 function abrirConfig() {
   pintarConfig();
   $('cierre').value = cierre();
+  $('cierre-auto').checked = cierreAuto();
   $('config').showModal();
 }
 $('abrir-config').addEventListener('click', abrirConfig);
@@ -338,14 +339,25 @@ document.addEventListener('visibilitychange', () => {
 
 /* Mi cierre: un texto que se repite al final de las descripciones (retiro, horarios, no envíos…). */
 const cierre = () => local('vendeloya.cierre').trim();
+/* Con la casilla de Ajustes, el cierre va SIEMPRE al principio y al final de la descripción (sin repetirse). */
+const cierreAuto = () => local('vendeloya.cierre-auto') === '1' && !!cierre();
+const conCierreAuto = texto => (cierreAuto() ? conAvisoFijo(texto, cierre()) : texto);
 
 function pintarCierre() {
-  $('agregar-cierre').hidden = !cierre();
+  $('agregar-cierre').hidden = !cierre() || cierreAuto();   // con el automático el botón manual sobra
 }
 $('guardar-cierre').addEventListener('click', () => {
-  local('vendeloya.cierre', $('cierre').value.trim() || null);
+  const texto = $('cierre').value.trim();
+  local('vendeloya.cierre', texto || null);
+  if (!texto) { local('vendeloya.cierre-auto', null); $('cierre-auto').checked = false; }   // sin cierre no hay nada que poner
   pintarCierre();
-  toast($('cierre').value.trim() ? 'Cierre guardado.' : 'Cierre borrado.');
+  toast(texto ? 'Cierre guardado.' : 'Cierre borrado.');
+});
+$('cierre-auto').addEventListener('change', () => {
+  if ($('cierre-auto').checked && !cierre()) { $('cierre-auto').checked = false; toast('Primero escribí y guardá tu cierre.'); return; }
+  local('vendeloya.cierre-auto', $('cierre-auto').checked ? '1' : null);
+  pintarCierre();
+  toast($('cierre-auto').checked ? 'Tu cierre va a salir siempre al principio y al final de la descripción.' : 'Ya no se agrega solo.');
 });
 $('agregar-cierre').addEventListener('click', () => {
   const texto = cierre();
@@ -800,7 +812,7 @@ function mostrarRevision(r, guardada) {
   $('titulo').value = p.titulo || '';
   $('condicion').value = p.condicion || 'usado';
   $('precio').value = miles(p.precio);
-  $('descripcion').value = p.descripcion || '';
+  $('descripcion').value = conCierreAuto(p.descripcion || '');   // con el cierre automático se ve en el campo, no solo al publicar
   $('nota').value = p.nota || '';
   $('grupo-nota').querySelector('small').textContent = p.nota ? 'tiene una nota' : 'no se publica';
   $('garantia').value = p.garantia || '';
@@ -1391,6 +1403,19 @@ function textoResultado(accion, total, fallos) {
   if (total === 1) return fallos[0].error;
   const quienes = fallos.map(f => `${f.rotulo} (${f.error})`).join('; ');
   return fallos.length >= total ? `No se pudo en ningún talle: ${quienes}.` : `${base} en ${total - fallos.length} de ${total} talles. No se pudo en: ${quienes}. Esos quedaron como estaban.`;
+}
+/**
+ * Pone el aviso fijo del vendedor (retiro, "no se realizan envíos"…) al principio y al final de la descripción.
+ * No lo repite si ya está en ese extremo (se ignoran mayúsculas, saltos de línea y espacios de más), así que se puede aplicar
+ * cuantas veces haga falta con el mismo resultado. Sin aviso, o con la descripción vacía, devuelve la descripción como vino.
+ */
+function conAvisoFijo(descripcion, aviso) {
+  const a = String(aviso || '').trim();
+  const d = String(descripcion || '').trim();
+  if (!a || !d) return String(descripcion || '');
+  const norm = s => s.replace(/\s+/g, ' ').trim().toLowerCase();
+  const nd = norm(d), na = norm(a);
+  return `${nd.startsWith(na) ? '' : `${a}\n\n`}${d}${nd.endsWith(na) ? '' : `\n\n${a}`}`;
 }
 /** Cómo queda el envío, dicho para el diálogo de confirmación. */
 function textoEnvio({ envio, envioGratis, retiroTambien }) {
@@ -2318,7 +2343,7 @@ $('pub-stock-guardar').addEventListener('click', () => {
 });
 $('pub-descripcion-guardar').addEventListener('click', () => {
   if ($('pub-descripcion').value.trim().length < 2) { toast('Escribí la descripción.'); $('pub-descripcion').focus(); return; }
-  accionPublicacion('descripcion', { descripcion: $('pub-descripcion').value });
+  accionPublicacion('descripcion', { descripcion: conCierreAuto($('pub-descripcion').value) });
 });
 $('pub-pausar').addEventListener('click', () => accionPublicacion('pausar'));
 $('pub-reactivar').addEventListener('click', () => accionPublicacion('reactivar'));
@@ -2535,7 +2560,7 @@ function leerPublicacion() {
     garantia,
     garantiaTiempo: garantia === 'Garantía del vendedor' ? '30 días' : '',
     envio: $('envio').value,
-    descripcion: $('descripcion').value,
+    descripcion: conCierreAuto($('descripcion').value),
     nota: $('nota').value.trim(), // privada: el Worker solo arma el ítem con los campos que conoce
     costo: valorDinero('costo'),             // privados también: costo del producto y envío a cargo
     costoEnvio: valorDinero('costo-envio'),
